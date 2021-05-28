@@ -31,9 +31,9 @@ type StepContext struct {
 	Action     *model.Action
 }
 
-func (sc *StepContext) execJobContainer() common.Executor {
+func (sc *StepContext) execJobContainer(workdir string) common.Executor {
 	return func(ctx context.Context) error {
-		return sc.RunContext.execJobContainer(sc.Cmd, sc.Env)(ctx)
+		return sc.RunContext.execJobContainer(sc.Cmd, sc.Env, workdir)(ctx)
 	}
 }
 
@@ -52,7 +52,7 @@ func (sc *StepContext) Executor() common.Executor {
 	case model.StepTypeRun:
 		return common.NewPipelineExecutor(
 			sc.setupShellCommand(),
-			sc.execJobContainer(),
+			sc.execJobContainer(step.WorkingDirectory),
 		)
 
 	case model.StepTypeUsesDockerURL:
@@ -100,6 +100,8 @@ func (sc *StepContext) Executor() common.Executor {
 				ntErr = common.NewInfoExecutor("Non-terminating error while running 'git clone': %v", err)
 			}
 		}
+		sc.Env["GITHUB_ACTION_REF"] = remoteAction.Ref
+		sc.Env["GITHUB_ACTION_REPOSITORY"] = remoteAction.Repo
 		return common.NewPipelineExecutor(
 			ntErr,
 			sc.setupAction(actionDir, remoteAction.Path),
@@ -172,12 +174,6 @@ func (sc *StepContext) setupShellCommand() common.Executor {
 		}
 		if step.WorkingDirectory == "" {
 			step.WorkingDirectory = rc.Run.Workflow.Defaults.Run.WorkingDirectory
-		}
-		if step.WorkingDirectory != "" {
-			_, err = script.WriteString(fmt.Sprintf("cd %s\n", step.WorkingDirectory))
-			if err != nil {
-				return err
-			}
 		}
 
 		run := rc.ExprEval.Interpolate(step.Run)
@@ -421,10 +417,13 @@ func (sc *StepContext) runAction(actionDir string, actionPath string) common.Exe
 
 		log.Debugf("type=%v actionDir=%s actionPath=%s Workdir=%s ActionCacheDir=%s actionName=%s containerActionDir=%s", step.Type(), actionDir, actionPath, rc.Config.Workdir, rc.ActionCacheDir(), actionName, containerActionDir)
 
+		sc.Env["GITHUB_ACTION_PATH"] = containerActionDir
+
 		maybeCopyToActionDir := func() error {
 			if step.Type() != model.StepTypeUsesActionRemote {
 				// If the workdir is bound to our repository then we don't need to copy the file
 				if rc.Config.BindWorkdir {
+					sc.Env["GITHUB_ACTION_PATH"] = actionDir
 					return nil
 				}
 			}
@@ -443,7 +442,7 @@ func (sc *StepContext) runAction(actionDir string, actionPath string) common.Exe
 			}
 			containerArgs := []string{"node", path.Join(containerActionDir, action.Runs.Main)}
 			log.Debugf("executing remote job container: %s", containerArgs)
-			return rc.execJobContainer(containerArgs, sc.Env)(ctx)
+			return rc.execJobContainer(containerArgs, sc.Env, "")(ctx)
 		case model.ActionRunsUsingDocker:
 			return sc.execAsDocker(ctx, action, actionName, actionDir, actionPath, rc, step)
 		case model.ActionRunsUsingComposite:
@@ -573,15 +572,22 @@ func (sc *StepContext) execAsComposite(ctx context.Context, step *model.Step, _ 
 		if stepClone.Env == nil {
 			stepClone.Env = make(map[string]string)
 		}
-		actionPath := filepath.Join(containerActionDir, actionName)
-		stepClone.Env["GITHUB_ACTION_PATH"] = actionPath
-		stepClone.Run = strings.ReplaceAll(stepClone.Run, "${{ github.action_path }}", actionPath)
-
 		stepContext := StepContext{
 			RunContext: rcClone,
 			Step:       &stepClone,
-			Env:        mergeMaps(sc.Env, stepClone.Env),
+			Env:        make(map[string]string),
 		}
+
+		stepContext.Env = mergeMaps(sc.Env, stepClone.Env)
+		rcClone.Env["GITHUB_ACTION_PATH"] = sc.Env["GITHUB_ACTION_PATH"]
+		ev := stepContext.NewExpressionEvaluator()
+		rcClone.Env["GITHUB_ACTION_PATH"] = ""
+		stepContext.interpolateEnv(ev)
+
+		rcClone.Env["GITHUB_ACTION_PATH"] = sc.Env["GITHUB_ACTION_PATH"]
+		ev = stepContext.NewExpressionEvaluator()
+		rcClone.Env["GITHUB_ACTION_PATH"] = ""
+		stepClone.Run = ev.Interpolate(stepClone.Run)
 
 		// Interpolate the outer inputs into the composite step with items
 		exprEval := sc.NewExpressionEvaluator()

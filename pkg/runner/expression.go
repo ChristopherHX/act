@@ -405,9 +405,9 @@ func (sc *StepContext) vmInputs() func(*otto.Otto) {
 			inputs[k] = input.Default
 		}
 	}
-
+	eval := sc.RunContext.NewExpressionEvaluator()
 	for k, v := range sc.Step.With {
-		inputs[k] = sc.RunContext.NewExpressionEvaluator().Interpolate(v)
+		inputs[k] = eval.Interpolate(v)
 	}
 
 	return func(vm *otto.Otto) {

@@ -151,7 +151,7 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			rc.JobContainer.Create(),
 			rc.JobContainer.Start(false),
 			rc.JobContainer.UpdateFromEnv("/etc/environment", &rc.Env),
-			rc.JobContainer.Exec([]string{"mkdir", "-m", "0777", "-p", ActPath}, rc.Env, "root"),
+			rc.JobContainer.Exec([]string{"mkdir", "-m", "0777", "-p", ActPath}, rc.Env, "root", ""),
 			rc.JobContainer.CopyDir(copyToPath, rc.Config.Workdir+string(filepath.Separator)+".", rc.Config.UseGitIgnore).IfBool(copyWorkspace),
 			rc.JobContainer.Copy(ActPath+"/", &container.FileEntry{
 				Name: "workflow/event.json",
@@ -169,9 +169,9 @@ func (rc *RunContext) startJobContainer() common.Executor {
 		)(ctx)
 	}
 }
-func (rc *RunContext) execJobContainer(cmd []string, env map[string]string) common.Executor {
+func (rc *RunContext) execJobContainer(cmd []string, env map[string]string, workdir string) common.Executor {
 	return func(ctx context.Context) error {
-		return rc.JobContainer.Exec(cmd, env, "")(ctx)
+		return rc.JobContainer.Exec(cmd, env, "", workdir)(ctx)
 	}
 }
 
@@ -499,9 +499,9 @@ func (rc *RunContext) getGithubContext() *githubContext {
 		Workspace:        rc.Config.ContainerWorkdir(),
 		Action:           rc.CurrentStep,
 		Token:            rc.Config.Secrets["GITHUB_TOKEN"],
-		ActionPath:       rc.Config.Env["GITHUB_ACTION_PATH"],
-		ActionRef:        rc.Config.Env["RUNNER_ACTION_REF"],
-		ActionRepository: rc.Config.Env["RUNNER_ACTION_REPOSITORY"],
+		ActionPath:       rc.Env["GITHUB_ACTION_PATH"],
+		ActionRef:        rc.Env["GITHUB_ACTION_REF"],
+		ActionRepository: rc.Env["GITHUB_ACTION_REPOSITORY"],
 		RepositoryOwner:  rc.Config.Env["GITHUB_REPOSITORY_OWNER"],
 		RetentionDays:    rc.Config.Env["GITHUB_RETENTION_DAYS"],
 		RunnerPerflog:    rc.Config.Env["RUNNER_PERFLOG"],
