@@ -206,7 +206,7 @@ func (sc *StepContext) setupShellCommand() common.Executor {
 		run = runPrepend + "\n" + run + "\n" + runAppend
 
 		log.Debugf("Wrote command '%s' to '%s'", run, scriptName)
-		containerPath := fmt.Sprintf("%s/%s", rc.Config.ContainerWorkdir(), scriptName)
+		containerPath := path.Join(ActPath, scriptName)
 
 		if step.Shell == "" {
 			step.Shell = rc.Run.Job().Defaults.Run.Shell
@@ -222,7 +222,7 @@ func (sc *StepContext) setupShellCommand() common.Executor {
 			sc.Cmd = strings.Fields(scResolvedCmd)
 		}
 
-		return rc.JobContainer.Copy(rc.Config.ContainerWorkdir(), &container.FileEntry{
+		return rc.JobContainer.Copy(ActPath, &container.FileEntry{
 			Name: scriptName,
 			Mode: 0755,
 			Body: script.String(),
@@ -377,15 +377,12 @@ func getOsSafeRelativePath(s, prefix string) string {
 func (sc *StepContext) getContainerActionPaths(step *model.Step, actionDir string, rc *RunContext) (string, string) {
 	actionName := ""
 	containerActionDir := "."
-	if !rc.Config.BindWorkdir && step.Type() != model.StepTypeUsesActionRemote {
-		actionName = getOsSafeRelativePath(actionDir, rc.Config.Workdir)
-		containerActionDir = ActPath + "/actions/" + actionName
-	} else if step.Type() == model.StepTypeUsesActionRemote {
+	if step.Type() == model.StepTypeUsesActionRemote {
 		actionName = getOsSafeRelativePath(actionDir, rc.ActionCacheDir())
-		containerActionDir = ActPath + "/actions/" + actionName
+		containerActionDir = path.Join(ActPath, "actions", actionName)
 	} else if step.Type() == model.StepTypeUsesActionLocal {
 		actionName = getOsSafeRelativePath(actionDir, rc.Config.Workdir)
-		containerActionDir = ActPath + "/actions/" + actionName
+		containerActionDir = path.Join(rc.Config.ContainerWorkdir(), actionName)
 	}
 
 	if actionName == "" {
@@ -393,6 +390,7 @@ func (sc *StepContext) getContainerActionPaths(step *model.Step, actionDir strin
 		if runtime.GOOS == "windows" {
 			actionName = strings.ReplaceAll(actionName, "\\", "/")
 		}
+		// containerActionDir = path.Join(containerActionDir, actionName)
 	}
 	return actionName, containerActionDir
 }
@@ -421,11 +419,8 @@ func (sc *StepContext) runAction(actionDir string, actionPath string) common.Exe
 
 		maybeCopyToActionDir := func() error {
 			if step.Type() != model.StepTypeUsesActionRemote {
-				// If the workdir is bound to our repository then we don't need to copy the file
-				if rc.Config.BindWorkdir {
-					sc.Env["GITHUB_ACTION_PATH"] = actionDir
-					return nil
-				}
+				sc.Env["GITHUB_ACTION_PATH"] = actionDir
+				return nil
 			}
 			err := removeGitIgnore(actionDir)
 			if err != nil {
