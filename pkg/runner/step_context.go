@@ -567,8 +567,13 @@ func (sc *StepContext) execAsComposite(ctx context.Context, step *model.Step, _ 
 				Outputs: make(map[string]string),
 			}
 		}
+		
+		if stepClone.Env == nil {
+			stepClone.Env = make(map[string]string)
+		}
 
 		env := stepClone.Environment()
+
 		stepContext := StepContext{
 			RunContext: rcClone,
 			Step:       step,
