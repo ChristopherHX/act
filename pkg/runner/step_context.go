@@ -576,10 +576,6 @@ func (sc *StepContext) execAsComposite(ctx context.Context, step *model.Step, _ 
 		}
 
 		// Required to set github.action_path
-		if rcClone.Config.Env == nil {
-			// Workaround to get test working
-			rcClone.Config.Env = make(map[string]string)
-		}
 		rcClone.Config.Env["GITHUB_ACTION_PATH"] = sc.Env["GITHUB_ACTION_PATH"]
 		ev := stepContext.NewExpressionEvaluator()
 		// Required to interpolate inputs and github.action_path into the env map
