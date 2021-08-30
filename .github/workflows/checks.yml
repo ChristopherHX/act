@@ -1,6 +1,8 @@
 name: checks
 on: [pull_request, workflow_dispatch]
-
+env:
+  ACT_OWNER: ${{ github.repository_owner }}
+  ACT_REPOSITORY: ${{ github.repository }}
 jobs:
   lint:
     name: lint
