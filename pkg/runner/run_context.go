@@ -719,6 +719,9 @@ func (rc *RunContext) withGithubEnv(env map[string]string) map[string]string {
 }
 
 func (rc *RunContext) localCheckoutPath() (string, bool) {
+	if rc.Config.ForceRemoteCheckout {
+		return "", false
+	}
 	ghContext := rc.getGithubContext()
 	for _, step := range rc.Run.Job().Steps {
 		if ghContext.isLocalCheckout(step) {
