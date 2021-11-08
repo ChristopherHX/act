@@ -10,7 +10,7 @@ require (
 	github.com/andreaskoch/go-fswatch v1.0.0
 	github.com/containerd/containerd v1.5.5 // indirect
 	github.com/containerd/continuity v0.2.0 // indirect
-	github.com/creack/pty v1.1.11 // indirect
+	github.com/creack/pty v1.1.11
 	github.com/docker/cli v20.10.8+incompatible
 	github.com/docker/docker v20.10.8+incompatible
 	github.com/go-git/go-billy/v5 v5.3.1
@@ -26,7 +26,7 @@ require (
 	github.com/mattn/go-isatty v0.0.14
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/moby/buildkit v0.9.0
+	github.com/moby/buildkit v0.9.2
 	github.com/opencontainers/image-spec v1.0.1
 	github.com/opencontainers/runc v1.0.2 // indirect
 	github.com/pkg/errors v0.9.1
