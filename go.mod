@@ -8,6 +8,7 @@ require (
 	github.com/ProtonMail/go-crypto v0.0.0-20210920160938-87db9fbc61c7 // indirect
 	github.com/andreaskoch/go-fswatch v1.0.0
 	github.com/containerd/continuity v0.2.0 // indirect
+	github.com/creack/pty v1.1.11
 	github.com/docker/cli v20.10.12+incompatible
 	github.com/docker/distribution v2.8.0+incompatible
 	github.com/docker/docker v20.10.12+incompatible
@@ -28,7 +29,7 @@ require (
 	github.com/opencontainers/image-spec v1.0.2
 	github.com/opencontainers/selinux v1.10.0
 	github.com/pkg/errors v0.9.1
-	github.com/rhysd/actionlint v1.6.8
+	github.com/rhysd/actionlint v1.6.11
 	github.com/sabhiram/go-gitignore v0.0.0-20201211210132-54b8a0bf510f
 	github.com/sergi/go-diff v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.8.1
