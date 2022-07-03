@@ -115,7 +115,7 @@ func (session *AgentMessageConnection) GetNextMessage(ctx context.Context) (*Tas
 		}, map[string]string{
 			"sessionId": session.TaskAgentSession.SessionId,
 		}, nil, message)
-		//TODO lastMessageId=
+		// TODO lastMessageId=
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return nil, err
