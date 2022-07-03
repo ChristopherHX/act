@@ -153,71 +153,68 @@ func setResponseBody(r io.Reader, body interface{}) error {
 	return nil
 }
 
-func (vssConnection *VssConnection) RequestWithContext2(ctx context.Context, method string, url string, protocol string, requestBody interface{}, responseBody interface{}) error {
-	for i := 0; i < 2; i++ {
-		buf, err := extractReader(requestBody)
-		if err != nil {
-			return err
-		}
-		request, err := http.NewRequestWithContext(ctx, method, url, buf)
-		if err != nil {
-			return err
-		}
-		AddContentType(request.Header, protocol)
-		AddHeaders(request.Header)
-		AddBearer(request.Header, vssConnection.Token)
-		if vssConnection.Trace {
-			fmt.Printf("Http %v Request started %v\nHeaders:\n%v\nBody: `%v`\n", method, url, getHeadersAsString(request.Header), getBodyAsString(buf))
-		}
-
-		response, err := vssConnection.Client.Do(request)
-		if err != nil {
-			return err
-		}
-		if response == nil {
-			return fmt.Errorf("failed to send request response is nil")
-		}
-		defer response.Body.Close()
-		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			if i == 0 && (response.StatusCode == 401 || response.StatusCode == 400) && vssConnection.TaskAgent != nil && vssConnection.Key != nil {
-				if vssConnection.Trace {
-					fmt.Printf("Http %v Request %v failed with status %v\nHeaders:\n%v\n", method, url, response.StatusCode, getHeadersAsString(response.Header))
-				}
-				authResponse, err := vssConnection.authorize()
-				if err != nil {
-					return err
-				}
-				vssConnection.Token = authResponse.AccessToken
-				continue
-			}
-			bytes, err := ioutil.ReadAll(response.Body)
-			if err != nil {
-				bytes = []byte("no response: " + err.Error())
-			}
-			err = fmt.Errorf("http %v Request %v failed with status %v, requestBody: `%v` and responseBody: `%v`", method, url, response.StatusCode, getBodyAsString(buf), string(bytes))
-			if vssConnection.Trace {
-				fmt.Println(err.Error())
-			}
-			return err
-		}
-		if responseBody != nil {
-			var responseReader io.Reader = response.Body
-			if vssConnection.Trace {
-				rbytes, err := ioutil.ReadAll(response.Body)
-				responseReader = bytes.NewReader(rbytes)
-				if err != nil {
-					rbytes = []byte("no response: " + err.Error())
-				}
-				fmt.Printf("Http %v Request succeeded %v %v\nHeaders: \n%v\nBody: `%v`\n", method, response.StatusCode, url, getHeadersAsString(response.Header), string(rbytes))
-			}
-			if response.StatusCode != 200 {
-				return io.EOF
-			}
-			return setResponseBody(responseReader, responseBody)
-		}
-		return nil
+func (vssConnection *VssConnection) requestWithContextNoAuth(ctx context.Context, method string, url string, protocol string, requestBody interface{}, responseBody interface{}) (int, error) {
+	buf, err := extractReader(requestBody)
+	if err != nil {
+		return 0, err
 	}
-	return fmt.Errorf("failed to send request unable to authenticate")
+	request, err := http.NewRequestWithContext(ctx, method, url, buf)
+	if err != nil {
+		return 0, err
+	}
+	AddContentType(request.Header, protocol)
+	AddHeaders(request.Header)
+	AddBearer(request.Header, vssConnection.Token)
+	if vssConnection.Trace {
+		fmt.Printf("Http %v Request started %v\nHeaders:\n%v\nBody: `%v`\n", method, url, getHeadersAsString(request.Header), getBodyAsString(buf))
+	}
+
+	response, err := vssConnection.Client.Do(request)
+	if err != nil {
+		return 0, err
+	}
+	if response == nil {
+		return 0, fmt.Errorf("failed to send request response is nil")
+	}
+	defer response.Body.Close()
+	var rbytes []byte
+	var responseReader io.Reader
+	failed := response.StatusCode < 200 || response.StatusCode >= 300
+	readResponse := vssConnection.Trace || failed
+	if responseBody != nil {
+		responseReader = response.Body
+		if readResponse {
+			rbytes, err = ioutil.ReadAll(response.Body)
+			responseReader = bytes.NewReader(rbytes)
+			if err != nil {
+				rbytes = []byte("no response: " + err.Error())
+			}
+		}
+	}
+	traceMessage := fmt.Sprintf("Http %v Request finished %v %v\nHeaders: \n%v\nBody: `%v`\n", method, response.StatusCode, url, getHeadersAsString(response.Header), string(rbytes))
+	if vssConnection.Trace {
+		fmt.Print(traceMessage)
+	}
+	if failed {
+		return response.StatusCode, fmt.Errorf("http failure: %v", traceMessage)
+	}
+	if response.StatusCode != 200 {
+		return response.StatusCode, io.EOF
+	}
+	return response.StatusCode, setResponseBody(responseReader, responseBody)
+}
+
+func (vssConnection *VssConnection) RequestWithContext2(ctx context.Context, method string, url string, protocol string, requestBody interface{}, responseBody interface{}) error {
+	statusCode, err := vssConnection.requestWithContextNoAuth(ctx, method, url, protocol, requestBody, responseBody)
+	if (statusCode == 401 || statusCode == 400) && vssConnection.TaskAgent != nil && vssConnection.Key != nil {
+		authResponse, err := vssConnection.authorize()
+		if err != nil {
+			return err
+		}
+		vssConnection.Token = authResponse.AccessToken
+		statusCode, err = vssConnection.requestWithContextNoAuth(ctx, method, url, protocol, requestBody, responseBody)
+	}
+	return err
 }
 
 func (vssConnection *VssConnection) GetAgentPools() (*TaskAgentPools, error) {
