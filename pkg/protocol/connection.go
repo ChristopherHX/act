@@ -20,17 +20,17 @@ import (
 
 type VssConnection struct {
 	Client         *http.Client
-	TenantUrl      string
+	TenantURL      string
 	ConnectionData *ConnectionData
 	Token          string
-	PoolId         int64
+	PoolID         int64
 	TaskAgent      *TaskAgent
 	Key            *rsa.PrivateKey
 	Trace          bool
 }
 
-func (vssConnection *VssConnection) BuildUrl(relativePath string, ppath map[string]string, query map[string]string) (string, error) {
-	url2, err := url.Parse(vssConnection.TenantUrl)
+func (vssConnection *VssConnection) BuildURL(relativePath string, ppath map[string]string, query map[string]string) (string, error) {
+	url2, err := url.Parse(vssConnection.TenantURL)
 	if err != nil {
 		return "", err
 	}
@@ -63,8 +63,8 @@ func (vssConnection *VssConnection) authorize() (*VssOAuthTokenResponse, error) 
 	return nil, err
 }
 
-func (vssConnection *VssConnection) Request(serviceId string, protocol string, method string, urlParameter map[string]string, queryParameter map[string]string, requestBody interface{}, responseBody interface{}) error {
-	return vssConnection.RequestWithContext(context.Background(), serviceId, protocol, method, urlParameter, queryParameter, requestBody, responseBody)
+func (vssConnection *VssConnection) Request(serviceID string, protocol string, method string, urlParameter map[string]string, queryParameter map[string]string, requestBody interface{}, responseBody interface{}) error {
+	return vssConnection.RequestWithContext(context.Background(), serviceID, protocol, method, urlParameter, queryParameter, requestBody, responseBody)
 }
 
 func AddContentType(header http.Header, apiversion string) {
@@ -86,8 +86,8 @@ func AddHeaders(header http.Header) {
 	header["X-TFS-Session"] = []string{uuid.NewString()}
 }
 
-func (vssConnection *VssConnection) GetServiceUrl(serviceId string, urlParameter map[string]string, queryParameter map[string]string) (string, error) {
-	serv := vssConnection.ConnectionData.GetServiceDefinition(serviceId)
+func (vssConnection *VssConnection) GetServiceURL(serviceID string, urlParameter map[string]string, queryParameter map[string]string) (string, error) {
+	serv := vssConnection.ConnectionData.GetServiceDefinition(serviceID)
 	if urlParameter == nil {
 		urlParameter = map[string]string{}
 	}
@@ -96,11 +96,11 @@ func (vssConnection *VssConnection) GetServiceUrl(serviceId string, urlParameter
 	if queryParameter == nil {
 		queryParameter = map[string]string{}
 	}
-	return vssConnection.BuildUrl(serv.RelativePath, urlParameter, queryParameter)
+	return vssConnection.BuildURL(serv.RelativePath, urlParameter, queryParameter)
 }
 
-func (vssConnection *VssConnection) RequestWithContext(ctx context.Context, serviceId string, protocol string, method string, urlParameter map[string]string, queryParameter map[string]string, requestBody interface{}, responseBody interface{}) error {
-	url, err := vssConnection.GetServiceUrl(serviceId, urlParameter, queryParameter)
+func (vssConnection *VssConnection) RequestWithContext(ctx context.Context, serviceID string, protocol string, method string, urlParameter map[string]string, queryParameter map[string]string, requestBody interface{}, responseBody interface{}) error {
+	url, err := vssConnection.GetServiceURL(serviceID, urlParameter, queryParameter)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (vssConnection *VssConnection) CreateSession() (*AgentMessageConnection, er
 	session.UseFipsEncryption = false // Have to be set to false for "GitHub Enterprise Server 3.0.11", github.com reset it to false 24-07-2021
 	session.OwnerName = "RUNNER"
 	if err := vssConnection.Request("134e239e-2df3-4794-a6f6-24f1f19ec8dc", "5.1-preview", "POST", map[string]string{
-		"poolId": fmt.Sprint(vssConnection.PoolId),
+		"poolId": fmt.Sprint(vssConnection.PoolID),
 	}, map[string]string{}, session, session); err != nil {
 		return nil, err
 	}
@@ -257,16 +257,16 @@ func (vssConnection *VssConnection) LoadSession(session *TaskAgentSession) (*Age
 	return con, nil
 }
 
-func (vssConnection *VssConnection) UpdateTimeLine(timelineId string, jobreq *AgentJobRequestMessage, wrap *TimelineRecordWrapper) error {
+func (vssConnection *VssConnection) UpdateTimeLine(timelineID string, jobreq *AgentJobRequestMessage, wrap *TimelineRecordWrapper) error {
 	return vssConnection.Request("8893bc5b-35b2-4be7-83cb-99e683551db4", "5.1-preview", "PATCH", map[string]string{
 		"scopeIdentifier": jobreq.Plan.ScopeIdentifier,
-		"planId":          jobreq.Plan.PlanId,
+		"planId":          jobreq.Plan.PlanID,
 		"hubName":         jobreq.Plan.PlanType,
-		"timelineId":      timelineId,
+		"timelineId":      timelineID,
 	}, map[string]string{}, wrap, nil)
 }
 
-func (vssConnection *VssConnection) UploadLogFile(timelineId string, jobreq *AgentJobRequestMessage, logContent string) (int, error) {
+func (vssConnection *VssConnection) UploadLogFile(timelineID string, jobreq *AgentJobRequestMessage, logContent string) (int, error) {
 	log := &TaskLog{}
 	p := "logs/" + uuid.NewString()
 	log.Path = &p
@@ -275,34 +275,34 @@ func (vssConnection *VssConnection) UploadLogFile(timelineId string, jobreq *Age
 
 	err := vssConnection.Request("46f5667d-263a-4684-91b1-dff7fdcf64e2", "5.1-preview", "POST", map[string]string{
 		"scopeIdentifier": jobreq.Plan.ScopeIdentifier,
-		"planId":          jobreq.Plan.PlanId,
+		"planId":          jobreq.Plan.PlanID,
 		"hubName":         jobreq.Plan.PlanType,
-		"timelineId":      timelineId,
+		"timelineId":      timelineID,
 	}, map[string]string{}, log, log)
 	if err != nil {
 		return 0, err
 	}
 	err = vssConnection.Request("46f5667d-263a-4684-91b1-dff7fdcf64e2", "5.1-preview", "POST", map[string]string{
 		"scopeIdentifier": jobreq.Plan.ScopeIdentifier,
-		"planId":          jobreq.Plan.PlanId,
+		"planId":          jobreq.Plan.PlanID,
 		"hubName":         jobreq.Plan.PlanType,
-		"timelineId":      timelineId,
-		"logId":           fmt.Sprint(log.Id),
+		"timelineId":      timelineID,
+		"logId":           fmt.Sprint(log.ID),
 	}, map[string]string{}, bytes.NewBufferString(logContent), nil)
-	return log.Id, err
+	return log.ID, err
 }
 
 func (vssConnection *VssConnection) DeleteAgent(taskAgent *TaskAgent) error {
 	return vssConnection.Request("e298ef32-5878-4cab-993c-043836571f42", "6.0-preview.2", "DELETE", map[string]string{
-		"poolId":  fmt.Sprint(vssConnection.PoolId),
-		"agentId": fmt.Sprint(taskAgent.Id),
+		"poolId":  fmt.Sprint(vssConnection.PoolID),
+		"agentId": fmt.Sprint(taskAgent.ID),
 	}, map[string]string{}, nil, nil)
 }
 
 func (vssConnection *VssConnection) FinishJob(e *JobEvent, plan *TaskOrchestrationPlanReference) error {
 	return vssConnection.Request("557624af-b29e-4c20-8ab0-0399d2204f3f", "2.0-preview.1", "POST", map[string]string{
 		"scopeIdentifier": plan.ScopeIdentifier,
-		"planId":          plan.PlanId,
+		"planId":          plan.PlanID,
 		"hubName":         plan.PlanType,
 	}, map[string]string{}, e, nil)
 }
