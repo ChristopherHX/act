@@ -6,6 +6,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	// nolint:gosec
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/base64"
@@ -79,6 +80,7 @@ func (session *TaskAgentSession) GetSessionKey(key *rsa.PrivateKey) (cipher.Bloc
 		if session.UseFipsEncryption {
 			h = sha256.New()
 		} else {
+			// nolint:gosec Needed for backward compatibility
 			h = sha1.New()
 		}
 		sessionKey, err = rsa.DecryptOAEP(h, rand.Reader, key, sessionKey, []byte{})
