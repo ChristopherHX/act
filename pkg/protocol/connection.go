@@ -212,7 +212,7 @@ func (vssConnection *VssConnection) RequestWithContext2(ctx context.Context, met
 			return err
 		}
 		vssConnection.Token = authResponse.AccessToken
-		statusCode, err = vssConnection.requestWithContextNoAuth(ctx, method, url, protocol, requestBody, responseBody)
+		_, err = vssConnection.requestWithContextNoAuth(ctx, method, url, protocol, requestBody, responseBody)
 	}
 	return err
 }

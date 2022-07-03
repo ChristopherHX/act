@@ -93,7 +93,6 @@ func (token *TemplateToken) ToRawObject() interface{} {
 	case 1:
 		a := make([]interface{}, 0)
 		for _, v := range *token.Seq {
-
 			a = append(a, v.ToRawObject())
 		}
 		return a
@@ -122,7 +121,6 @@ func (token *TemplateToken) ToJsonRawObject() interface{} {
 	case 1:
 		a := make([]interface{}, 0)
 		for _, v := range *token.Seq {
-
 			a = append(a, v.ToJsonRawObject())
 		}
 		return a
@@ -154,7 +152,6 @@ func (token *TemplateToken) ToYamlNode() *yaml.Node {
 	case 1:
 		a := make([]*yaml.Node, 0)
 		for _, v := range *token.Seq {
-
 			a = append(a, v.ToYamlNode())
 		}
 		return &yaml.Node{Kind: yaml.SequenceNode, Content: a}
