@@ -13,6 +13,7 @@ type GithubContext struct {
 	Workflow         string                 `json:"workflow"`
 	RunID            string                 `json:"run_id"`
 	RunNumber        string                 `json:"run_number"`
+	RunAttempt       string                 `json:"run_attempt"`
 	Actor            string                 `json:"actor"`
 	Repository       string                 `json:"repository"`
 	EventName        string                 `json:"event_name"`

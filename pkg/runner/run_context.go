@@ -624,6 +624,7 @@ func (rc *RunContext) getGithubContext() *model.GithubContext {
 		Workflow:         rc.Run.Workflow.Name,
 		RunID:            rc.Config.Env["GITHUB_RUN_ID"],
 		RunNumber:        rc.Config.Env["GITHUB_RUN_NUMBER"],
+		RunAttempt:       rc.Config.Env["GITHUB_RUN_ATTEMPT"],
 		Actor:            rc.Config.Actor,
 		EventName:        rc.Config.EventName,
 		Workspace:        rc.ContainerWorkdir(),
@@ -653,6 +654,10 @@ func applyDefaults(ghc *model.GithubContext, rc *RunContext) *model.GithubContex
 
 	if ghc.RunNumber == "" {
 		ghc.RunNumber = "1"
+	}
+
+	if ghc.RunAttempt == "" {
+		ghc.RunAttempt = "1"
 	}
 
 	if ghc.RetentionDays == "" {
@@ -757,6 +762,7 @@ func (rc *RunContext) withGithubEnv(env map[string]string) map[string]string {
 	env["GITHUB_WORKFLOW"] = github.Workflow
 	env["GITHUB_RUN_ID"] = github.RunID
 	env["GITHUB_RUN_NUMBER"] = github.RunNumber
+	env["GITHUB_RUN_ATTEMPT"] = github.RunAttempt
 	env["GITHUB_ACTION"] = github.Action
 	env["GITHUB_ACTION_PATH"] = github.ActionPath
 	env["GITHUB_ACTION_REPOSITORY"] = github.ActionRepository
