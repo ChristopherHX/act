@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/AlecAivazis/survey/v2"
 	"github.com/andreaskoch/go-fswatch"
 	"github.com/joho/godotenv"
 	"github.com/mitchellh/go-homedir"
@@ -471,44 +470,44 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 }
 
 func defaultImageSurvey(actrc string) error {
-	var answer string
-	confirmation := &survey.Select{
-		Message: "Please choose the default image you want to use with act:\n\n  - Large size image: +20GB Docker image, includes almost all tools used on GitHub Actions (IMPORTANT: currently only ubuntu-18.04 platform is available)\n  - Medium size image: ~500MB, includes only necessary tools to bootstrap actions and aims to be compatible with all actions\n  - Micro size image: <200MB, contains only NodeJS required to bootstrap actions, doesn't work with all actions\n\nDefault image and other options can be changed manually in ~/.actrc (please refer to https://github.com/nektos/act#configuration for additional information about file structure)",
-		Help:    "If you want to know why act asks you that, please go to https://github.com/nektos/act/issues/107",
-		Default: "Medium",
-		Options: []string{"Large", "Medium", "Micro"},
-	}
+	// var answer string
+	// confirmation := &survey.Select{
+	// 	Message: "Please choose the default image you want to use with act:\n\n  - Large size image: +20GB Docker image, includes almost all tools used on GitHub Actions (IMPORTANT: currently only ubuntu-18.04 platform is available)\n  - Medium size image: ~500MB, includes only necessary tools to bootstrap actions and aims to be compatible with all actions\n  - Micro size image: <200MB, contains only NodeJS required to bootstrap actions, doesn't work with all actions\n\nDefault image and other options can be changed manually in ~/.actrc (please refer to https://github.com/nektos/act#configuration for additional information about file structure)",
+	// 	Help:    "If you want to know why act asks you that, please go to https://github.com/nektos/act/issues/107",
+	// 	Default: "Medium",
+	// 	Options: []string{"Large", "Medium", "Micro"},
+	// }
 
-	err := survey.AskOne(confirmation, &answer)
-	if err != nil {
-		return err
-	}
+	// err := survey.AskOne(confirmation, &answer)
+	// if err != nil {
+	// 	return err
+	// }
 
-	var option string
-	switch answer {
-	case "Large":
-		option = "-P ubuntu-latest=catthehacker/ubuntu:full-latest\n-P ubuntu-latest=catthehacker/ubuntu:full-20.04\n-P ubuntu-18.04=catthehacker/ubuntu:full-18.04\n"
-	case "Medium":
-		option = "-P ubuntu-latest=catthehacker/ubuntu:act-latest\n-P ubuntu-22.04=catthehacker/ubuntu:act-22.04\n-P ubuntu-20.04=catthehacker/ubuntu:act-20.04\n-P ubuntu-18.04=catthehacker/ubuntu:act-18.04\n"
-	case "Micro":
-		option = "-P ubuntu-latest=node:16-buster-slim\n-P -P ubuntu-22.04=node:16-bullseye-slim\n ubuntu-20.04=node:16-buster-slim\n-P ubuntu-18.04=node:16-buster-slim\n"
-	}
+	// var option string
+	// switch answer {
+	// case "Large":
+	// 	option = "-P ubuntu-latest=catthehacker/ubuntu:full-latest\n-P ubuntu-latest=catthehacker/ubuntu:full-20.04\n-P ubuntu-18.04=catthehacker/ubuntu:full-18.04\n"
+	// case "Medium":
+	// 	option = "-P ubuntu-latest=catthehacker/ubuntu:act-latest\n-P ubuntu-22.04=catthehacker/ubuntu:act-22.04\n-P ubuntu-20.04=catthehacker/ubuntu:act-20.04\n-P ubuntu-18.04=catthehacker/ubuntu:act-18.04\n"
+	// case "Micro":
+	// 	option = "-P ubuntu-latest=node:16-buster-slim\n-P -P ubuntu-22.04=node:16-bullseye-slim\n ubuntu-20.04=node:16-buster-slim\n-P ubuntu-18.04=node:16-buster-slim\n"
+	// }
 
-	f, err := os.Create(actrc)
-	if err != nil {
-		return err
-	}
+	// f, err := os.Create(actrc)
+	// if err != nil {
+	// 	return err
+	// }
 
-	_, err = f.WriteString(option)
-	if err != nil {
-		_ = f.Close()
-		return err
-	}
+	// _, err = f.WriteString(option)
+	// if err != nil {
+	// 	_ = f.Close()
+	// 	return err
+	// }
 
-	err = f.Close()
-	if err != nil {
-		return err
-	}
+	// err = f.Close()
+	// if err != nil {
+	// 	return err
+	// }
 
 	return nil
 }
