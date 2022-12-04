@@ -1,4 +1,4 @@
-package container
+package docker
 
 import (
 	"archive/tar"
@@ -36,55 +36,11 @@ import (
 	"golang.org/x/term"
 
 	"github.com/nektos/act/pkg/common"
+	containerTypes "github.com/nektos/act/pkg/container/common"
 )
 
-// NewContainerInput the input for the New function
-type NewContainerInput struct {
-	Image       string
-	Username    string
-	Password    string
-	Entrypoint  []string
-	Cmd         []string
-	WorkingDir  string
-	Env         []string
-	Binds       []string
-	Mounts      map[string]string
-	Name        string
-	Stdout      io.Writer
-	Stderr      io.Writer
-	NetworkMode string
-	Privileged  bool
-	UsernsMode  string
-	Platform    string
-	Options     string
-}
-
-// FileEntry is a file to copy to a container
-type FileEntry struct {
-	Name string
-	Mode int64
-	Body string
-}
-
-// Container for managing docker run containers
-type Container interface {
-	Create(capAdd []string, capDrop []string) common.Executor
-	Copy(destPath string, files ...*FileEntry) common.Executor
-	CopyDir(destPath string, srcPath string, useGitIgnore bool) common.Executor
-	GetContainerArchive(ctx context.Context, srcPath string) (io.ReadCloser, error)
-	Pull(forcePull bool) common.Executor
-	Start(attach bool) common.Executor
-	Exec(command []string, env map[string]string, user, workdir string) common.Executor
-	UpdateFromEnv(srcPath string, env *map[string]string) common.Executor
-	UpdateFromImageEnv(env *map[string]string) common.Executor
-	UpdateFromPath(env *map[string]string) common.Executor
-	Remove() common.Executor
-	Close() common.Executor
-	ReplaceLogWriter(io.Writer, io.Writer) (io.Writer, io.Writer)
-}
-
 // NewContainer creates a reference to a container
-func NewContainer(input *NewContainerInput) ExecutionsEnvironment {
+func NewContainer(input *containerTypes.NewContainerInput) containerTypes.ExecutionsEnvironment {
 	cr := new(containerReference)
 	cr.input = input
 	return cr
@@ -157,7 +113,7 @@ func (cr *containerReference) Pull(forcePull bool) common.Executor {
 		)
 }
 
-func (cr *containerReference) Copy(destPath string, files ...*FileEntry) common.Executor {
+func (cr *containerReference) Copy(destPath string, files ...*containerTypes.FileEntry) common.Executor {
 	return common.NewPipelineExecutor(
 		cr.connect(),
 		cr.find(),
@@ -230,10 +186,10 @@ func (cr *containerReference) ReplaceLogWriter(stdout io.Writer, stderr io.Write
 type containerReference struct {
 	cli   client.APIClient
 	id    string
-	input *NewContainerInput
+	input *containerTypes.NewContainerInput
 	UID   int
 	GID   int
-	LinuxContainerEnvironmentExtensions
+	containerTypes.LinuxContainerEnvironmentExtensions
 }
 
 func GetDockerClient(ctx context.Context) (cli client.APIClient, err error) {
@@ -816,7 +772,7 @@ func (cr *containerReference) copyDir(dstPath string, srcPath string, useGitIgno
 			},
 		}
 
-		err = filepath.Walk(srcPath, fc.collectFiles(ctx, []string{}))
+		err = filepath.Walk(srcPath, fc.CollectFiles(ctx, []string{}))
 		if err != nil {
 			return err
 		}

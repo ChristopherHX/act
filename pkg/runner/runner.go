@@ -9,7 +9,6 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/nektos/act/pkg/common"
-	"github.com/nektos/act/pkg/container"
 	"github.com/nektos/act/pkg/model"
 )
 
@@ -150,15 +149,15 @@ func (runner *runnerImpl) NewPlanExecutor(plan *model.Plan) common.Executor {
 				}
 				pipeline = append(pipeline, common.NewParallelExecutor(maxParallel, stageExecutor...))
 			}
-			var ncpu int
-			info, err := container.GetHostInfo(ctx)
-			if err != nil {
-				log.Errorf("failed to obtain container engine info: %s", err)
-				ncpu = 1 // sane default?
-			} else {
-				ncpu = info.NCPU
-			}
-			return common.NewParallelExecutor(ncpu, pipeline...)(ctx)
+			// var ncpu int
+			// info, err := container.GetHostInfo(ctx)
+			// if err != nil {
+			// 	log.Errorf("failed to obtain container engine info: %s", err)
+			// 	ncpu = 1 // sane default?
+			// } else {
+			// 	ncpu = info.NCPU
+			// }
+			return common.NewParallelExecutor(4, pipeline...)(ctx)
 		})
 	}
 

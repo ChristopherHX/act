@@ -6,7 +6,7 @@
 //
 
 //nolint:unparam,errcheck,depguard,deadcode,unused
-package container
+package docker
 
 import (
 	"bytes"

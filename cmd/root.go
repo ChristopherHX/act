@@ -21,7 +21,6 @@ import (
 
 	"github.com/nektos/act/pkg/artifacts"
 	"github.com/nektos/act/pkg/common"
-	"github.com/nektos/act/pkg/container"
 	"github.com/nektos/act/pkg/model"
 	"github.com/nektos/act/pkg/runner"
 )
@@ -185,33 +184,33 @@ func bugReport(ctx context.Context, version string) error {
 		}
 	}
 
-	info, err := container.GetHostInfo(ctx)
-	if err != nil {
-		fmt.Println(report)
-		return err
-	}
+	// info, err := container.GetHostInfo(ctx)
+	// if err != nil {
+	// 	fmt.Println(report)
+	// 	return err
+	// }
 
-	report += fmt.Sprintln("Docker Engine:")
+	// report += fmt.Sprintln("Docker Engine:")
 
-	report += sprintf("\tEngine version:", info.ServerVersion)
-	report += sprintf("\tEngine runtime:", info.DefaultRuntime)
-	report += sprintf("\tCgroup version:", info.CgroupVersion)
-	report += sprintf("\tCgroup driver:", info.CgroupDriver)
-	report += sprintf("\tStorage driver:", info.Driver)
-	report += sprintf("\tRegistry URI:", info.IndexServerAddress)
+	// report += sprintf("\tEngine version:", info.ServerVersion)
+	// report += sprintf("\tEngine runtime:", info.DefaultRuntime)
+	// report += sprintf("\tCgroup version:", info.CgroupVersion)
+	// report += sprintf("\tCgroup driver:", info.CgroupDriver)
+	// report += sprintf("\tStorage driver:", info.Driver)
+	// report += sprintf("\tRegistry URI:", info.IndexServerAddress)
 
-	report += sprintf("\tOS:", info.OperatingSystem)
-	report += sprintf("\tOS type:", info.OSType)
-	report += sprintf("\tOS version:", info.OSVersion)
-	report += sprintf("\tOS arch:", info.Architecture)
-	report += sprintf("\tOS kernel:", info.KernelVersion)
-	report += sprintf("\tOS CPU:", fmt.Sprint(info.NCPU))
-	report += sprintf("\tOS memory:", fmt.Sprintf("%d MB", info.MemTotal/1024/1024))
+	// report += sprintf("\tOS:", info.OperatingSystem)
+	// report += sprintf("\tOS type:", info.OSType)
+	// report += sprintf("\tOS version:", info.OSVersion)
+	// report += sprintf("\tOS arch:", info.Architecture)
+	// report += sprintf("\tOS kernel:", info.KernelVersion)
+	// report += sprintf("\tOS CPU:", fmt.Sprint(info.NCPU))
+	// report += sprintf("\tOS memory:", fmt.Sprintf("%d MB", info.MemTotal/1024/1024))
 
-	report += fmt.Sprintln("\tSecurity options:")
-	for _, secopt := range info.SecurityOptions {
-		report += fmt.Sprintf("\t\t%s\n", secopt)
-	}
+	// report += fmt.Sprintln("\tSecurity options:")
+	// for _, secopt := range info.SecurityOptions {
+	// 	report += fmt.Sprintf("\t\t%s\n", secopt)
+	// }
 
 	fmt.Println(report)
 	return nil

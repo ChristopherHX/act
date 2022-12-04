@@ -1,4 +1,4 @@
-package container
+package common
 
 import (
 	"context"
@@ -66,7 +66,7 @@ func (*LinuxContainerEnvironmentExtensions) JoinPathVariable(paths ...string) st
 func (*LinuxContainerEnvironmentExtensions) GetRunnerContext(ctx context.Context) map[string]interface{} {
 	return map[string]interface{}{
 		"os":         "Linux",
-		"arch":       RunnerArch(ctx),
+		"arch":       "RunnerArch(ctx)",
 		"temp":       "/tmp",
 		"tool_cache": "/opt/hostedtoolcache",
 	}

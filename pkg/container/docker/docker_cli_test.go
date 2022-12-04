@@ -7,7 +7,7 @@
 //
 
 //nolint:unparam,whitespace,depguard,dupl,gocritic
-package container
+package docker
 
 import (
 	"fmt"

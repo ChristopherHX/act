@@ -83,11 +83,11 @@ func (e *HostEnvironment) CopyDir(destPath string, srcPath string, useGitIgnore 
 			Ignorer:   ignorer,
 			SrcPath:   srcPath,
 			SrcPrefix: srcPrefix,
-			Handler: &copyCollector{
+			Handler: &CopyCollector{
 				DstDir: destPath,
 			},
 		}
-		return filepath.Walk(srcPath, fc.collectFiles(ctx, []string{}))
+		return filepath.Walk(srcPath, fc.CollectFiles(ctx, []string{}))
 	}
 }
 
@@ -114,7 +114,7 @@ func (e *HostEnvironment) GetContainerArchive(ctx context.Context, srcPath strin
 			SrcPrefix: srcPrefix,
 			Handler:   tc,
 		}
-		err = filepath.Walk(srcPath, fc.collectFiles(ctx, []string{}))
+		err = filepath.Walk(srcPath, fc.CollectFiles(ctx, []string{}))
 		if err != nil {
 			return nil, err
 		}
