@@ -343,37 +343,6 @@ func TestRunDifferentArchitecture(t *testing.T) {
 	tjfi.runTest(context.Background(), t, &Config{ContainerArchitecture: "linux/arm64"})
 }
 
-func TestMaskValues(t *testing.T) {
-	assertNoSecret := func(text string, secret string) {
-		index := strings.Index(text, "composite secret")
-		if index > -1 {
-			fmt.Printf("\nFound Secret in the given text:\n%s\n", text)
-		}
-		assert.False(t, strings.Contains(text, "composite secret"))
-	}
-
-	if testing.Short() {
-		t.Skip("skipping integration test")
-	}
-
-	log.SetLevel(log.DebugLevel)
-
-	tjfi := TestJobFileInfo{
-		workdir:      workdir,
-		workflowPath: "mask-values",
-		eventName:    "push",
-		errorMessage: "",
-		platforms:    platforms,
-	}
-
-	output := captureOutput(t, func() {
-		tjfi.runTest(context.Background(), t, &Config{})
-	})
-
-	assertNoSecret(output, "secret value")
-	assertNoSecret(output, "YWJjCg==")
-}
-
 func TestRunEventSecrets(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
