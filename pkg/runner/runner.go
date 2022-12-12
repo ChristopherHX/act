@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 
 	log "github.com/sirupsen/logrus"
 
 	"github.com/nektos/act/pkg/common"
+	"github.com/nektos/act/pkg/common/git"
 	"github.com/nektos/act/pkg/container"
 	"github.com/nektos/act/pkg/model"
 )
@@ -42,6 +44,9 @@ type Config struct {
 	ContainerOptions                   string            // Options for the job container
 	UseGitIgnore                       bool              // controls if paths in .gitignore should not be copied into container, default true
 	GitHubInstance                     string            // GitHub instance to use, default "github.com"
+	GitHubServerUrl                    string            // GitHub server url to use
+	GitHubApiServerUrl                 string            // GitHub api server url to use
+	GitHubGraphQlApiServerUrl          string            // GitHub graphql server url to use
 	ContainerCapAdd                    []string          // list of kernel capabilities to add to the containers
 	ContainerCapDrop                   []string          // list of kernel capabilities to remove from the containers
 	AutoRemove                         bool              // controls if the container is automatically removed upon workflow completion
@@ -51,6 +56,39 @@ type Config struct {
 	RemoteName                         string            // remote name in local git repo config
 	ReplaceGheActionWithGithubCom      []string          // Use actions from GitHub Enterprise instance to GitHub
 	ReplaceGheActionTokenWithGithubCom string            // Token of private action repo on GitHub.
+	DownloadAction                     func(git.NewGitCloneExecutorInput) common.Executor
+}
+
+func (runnerConfig *Config) GetGitHubServerUrl() string {
+	if len(runnerConfig.GitHubServerUrl) > 0 {
+		return runnerConfig.GitHubServerUrl
+	}
+	return fmt.Sprintf("https://%s", runnerConfig.GitHubInstance)
+}
+func (runnerConfig *Config) GetGitHubApiServerUrl() string {
+	if len(runnerConfig.GitHubApiServerUrl) > 0 {
+		return runnerConfig.GitHubApiServerUrl
+	}
+	if runnerConfig.GitHubInstance == "github.com" {
+		return "https://api.github.com"
+	}
+	return fmt.Sprintf("https://%s/api/v3", runnerConfig.GitHubInstance)
+}
+func (runnerConfig *Config) GetGitHubGraphQlApiServerUrl() string {
+	if len(runnerConfig.GitHubGraphQlApiServerUrl) > 0 {
+		return runnerConfig.GitHubGraphQlApiServerUrl
+	}
+	if runnerConfig.GitHubInstance == "github.com" {
+		return "https://api.github.com/graphql"
+	}
+	return fmt.Sprintf("https://%s/api/graphql", runnerConfig.GitHubInstance)
+}
+func (runnerConfig *Config) GetGitHubInstance() string {
+	if len(runnerConfig.GitHubServerUrl) > 0 {
+		regex := regexp.MustCompile("^https?://(.*)$")
+		return regex.ReplaceAllString(runnerConfig.GitHubServerUrl, "$1")
+	}
+	return runnerConfig.GitHubInstance
 }
 
 type runnerImpl struct {

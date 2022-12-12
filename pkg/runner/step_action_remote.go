@@ -46,7 +46,7 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 			return fmt.Errorf("Expected format {org}/{repo}[/path]@ref. Actual '%s' Input string was not in a correct format", sar.Step.Uses)
 		}
 
-		sar.remoteAction.URL = sar.RunContext.Config.GitHubInstance
+		sar.remoteAction.URL = sar.RunContext.Config.GetGitHubServerUrl()
 
 		github := sar.getGithubContext(ctx)
 		if sar.remoteAction.IsCheckout() && isLocalCheckout(github, sar.Step) && !sar.RunContext.Config.NoSkipCheckout {
@@ -54,16 +54,20 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 			return nil
 		}
 
-		sar.remoteAction.URL = sar.RunContext.Config.GitHubInstance
+		sar.remoteAction.URL = sar.RunContext.Config.GetGitHubServerUrl()
 		for _, action := range sar.RunContext.Config.ReplaceGheActionWithGithubCom {
 			if strings.EqualFold(fmt.Sprintf("%s/%s", sar.remoteAction.Org, sar.remoteAction.Repo), action) {
-				sar.remoteAction.URL = "github.com"
+				sar.remoteAction.URL = "https://github.com"
 				github.Token = sar.RunContext.Config.ReplaceGheActionTokenWithGithubCom
 			}
 		}
 
 		actionDir := fmt.Sprintf("%s/%s", sar.RunContext.ActionCacheDir(), strings.ReplaceAll(sar.Step.Uses, "/", "-"))
-		gitClone := stepActionRemoteNewCloneExecutor(git.NewGitCloneExecutorInput{
+		cloneExecutor := stepActionRemoteNewCloneExecutor
+		if sar.RunContext.Config.DownloadAction != nil {
+			cloneExecutor = sar.RunContext.Config.DownloadAction
+		}
+		gitClone := cloneExecutor(git.NewGitCloneExecutorInput{
 			URL:   sar.remoteAction.CloneURL(),
 			Ref:   sar.remoteAction.Ref,
 			Dir:   actionDir,
@@ -213,7 +217,7 @@ type remoteAction struct {
 }
 
 func (ra *remoteAction) CloneURL() string {
-	return fmt.Sprintf("https://%s/%s/%s", ra.URL, ra.Org, ra.Repo)
+	return fmt.Sprintf("%s/%s/%s", ra.URL, ra.Org, ra.Repo)
 }
 
 func (ra *remoteAction) IsCheckout() bool {
@@ -239,6 +243,6 @@ func newRemoteAction(action string) *remoteAction {
 		Repo: matches[2],
 		Path: matches[4],
 		Ref:  matches[6],
-		URL:  "github.com",
+		URL:  "https://github.com",
 	}
 }

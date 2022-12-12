@@ -3,6 +3,7 @@ package container
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -206,5 +207,26 @@ func (fc *fileCollector) collectFiles(ctx context.Context, submodulePath []strin
 		}
 
 		return fc.Handler.WriteFile(path, fi, "", f)
+	}
+}
+
+func ExtractTar(in io.Reader, dst string) error {
+	os.RemoveAll(dst)
+	tr := tar.NewReader(in)
+	cp := &copyCollector{
+		DstDir: dst,
+	}
+	for {
+		ti, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		pc := strings.SplitN(ti.Name, "/", 2)
+		if ti.FileInfo().IsDir() || len(pc) < 2 {
+			continue
+		}
+		cp.WriteFile(pc[1], ti.FileInfo(), ti.Linkname, tr)
 	}
 }

@@ -61,15 +61,22 @@ func newCompositeRunContext(ctx context.Context, parent *RunContext, step action
 				},
 			},
 		},
-		Config:       &configCopy,
-		StepResults:  map[string]*model.StepResult{},
-		JobContainer: parent.JobContainer,
-		ActionPath:   actionPath,
-		Env:          env,
-		Masks:        parent.Masks,
-		ExtraPath:    parent.ExtraPath,
-		Parent:       parent,
-		EventJSON:    parent.EventJSON,
+		Config:        &configCopy,
+		StepResults:   map[string]*model.StepResult{},
+		JobContainer:  parent.JobContainer,
+		ActionPath:    actionPath,
+		Env:           env,
+		Masks:         parent.Masks,
+		ExtraPath:     parent.ExtraPath,
+		Parent:        parent,
+		EventJSON:     parent.EventJSON,
+		GHContextData: parent.GHContextData,
+	}
+	if parent.ContextData != nil {
+		compositerc.ContextData = map[string]interface{}{
+			"github":   parent.ContextData["github"],
+			"strategy": parent.ContextData["strategy"],
+		}
 	}
 	compositerc.ExprEval = compositerc.NewExpressionEvaluator(ctx)
 

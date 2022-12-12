@@ -2,6 +2,7 @@ package exprparser
 
 import (
 	"encoding"
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -12,16 +13,17 @@ import (
 )
 
 type EvaluationEnvironment struct {
-	Github   *model.GithubContext
-	Env      map[string]string
-	Job      *model.JobContext
-	Steps    map[string]*model.StepResult
-	Runner   map[string]interface{}
-	Secrets  map[string]string
-	Strategy map[string]interface{}
-	Matrix   map[string]interface{}
-	Needs    map[string]map[string]map[string]string
-	Inputs   map[string]interface{}
+	Github      *model.GithubContext
+	Env         map[string]string
+	Job         *model.JobContext
+	Steps       map[string]*model.StepResult
+	Runner      map[string]interface{}
+	Secrets     map[string]string
+	Strategy    map[string]interface{}
+	Matrix      map[string]interface{}
+	Needs       map[string]map[string]map[string]string
+	Inputs      map[string]interface{}
+	ContextData map[string]interface{}
 }
 
 type Config struct {
@@ -143,7 +145,16 @@ func (impl *interperterImpl) evaluateNode(exprNode actionlint.ExprNode) (interfa
 }
 
 func (impl *interperterImpl) evaluateVariable(variableNode *actionlint.VariableNode) (interface{}, error) {
-	switch strings.ToLower(variableNode.Name) {
+	lowerName := strings.ToLower(variableNode.Name)
+	if cd, ok := impl.env.ContextData[lowerName]; ok {
+		switch lowerName {
+		case "github":
+			content, _ := json.Marshal(impl.env.Github)
+			_ = json.Unmarshal(content, &cd)
+		}
+		return cd, nil
+	}
+	switch lowerName {
 	case "github":
 		return impl.env.Github, nil
 	case "env":

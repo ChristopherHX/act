@@ -46,6 +46,8 @@ type RunContext struct {
 	Parent              *RunContext
 	Masks               []string
 	cleanUpJobContainer common.Executor
+	ContextData         map[string]interface{}
+	GHContextData       *string
 }
 
 func (rc *RunContext) AddMask(mask string) {
@@ -555,6 +557,13 @@ func (rc *RunContext) getGithubContext(ctx context.Context) *model.GithubContext
 		ghc.Workspace = rc.JobContainer.ToContainerPath(rc.Config.Workdir)
 	}
 
+	if rc.GHContextData != nil {
+		err := json.Unmarshal([]byte(*rc.GHContextData), ghc)
+		if err == nil {
+			return ghc
+		}
+	}
+
 	if ghc.RunID == "" {
 		ghc.RunID = "1"
 	}
@@ -578,7 +587,7 @@ func (rc *RunContext) getGithubContext(ctx context.Context) *model.GithubContext
 	}
 
 	repoPath := rc.Config.Workdir
-	repo, err := git.FindGithubRepo(ctx, repoPath, rc.Config.GitHubInstance, rc.Config.RemoteName)
+	repo, err := git.FindGithubRepo(ctx, repoPath, rc.Config.GetGitHubInstance(), rc.Config.RemoteName)
 	if err != nil {
 		logger.Warningf("unable to get git repo: %v", err)
 	} else {
@@ -687,9 +696,9 @@ func (rc *RunContext) withGithubEnv(ctx context.Context, github *model.GithubCon
 	env["GITHUB_REF_NAME"] = github.RefName
 	env["GITHUB_REF_TYPE"] = github.RefType
 	env["GITHUB_TOKEN"] = github.Token
-	env["GITHUB_SERVER_URL"] = "https://github.com"
-	env["GITHUB_API_URL"] = "https://api.github.com"
-	env["GITHUB_GRAPHQL_URL"] = "https://api.github.com/graphql"
+	env["GITHUB_SERVER_URL"] = rc.Config.GetGitHubServerUrl()
+	env["GITHUB_API_URL"] = rc.Config.GetGitHubApiServerUrl()
+	env["GITHUB_GRAPHQL_URL"] = rc.Config.GetGitHubGraphQlApiServerUrl()
 	env["GITHUB_BASE_REF"] = github.BaseRef
 	env["GITHUB_HEAD_REF"] = github.HeadRef
 	env["GITHUB_JOB"] = rc.JobName
@@ -697,11 +706,6 @@ func (rc *RunContext) withGithubEnv(ctx context.Context, github *model.GithubCon
 	env["GITHUB_RETENTION_DAYS"] = github.RetentionDays
 	env["RUNNER_PERFLOG"] = github.RunnerPerflog
 	env["RUNNER_TRACKING_ID"] = github.RunnerTrackingID
-	if rc.Config.GitHubInstance != "github.com" {
-		env["GITHUB_SERVER_URL"] = fmt.Sprintf("https://%s", rc.Config.GitHubInstance)
-		env["GITHUB_API_URL"] = fmt.Sprintf("https://%s/api/v3", rc.Config.GitHubInstance)
-		env["GITHUB_GRAPHQL_URL"] = fmt.Sprintf("https://%s/api/graphql", rc.Config.GitHubInstance)
-	}
 
 	if rc.Config.ArtifactServerPath != "" {
 		setActionRuntimeVars(rc, env)
