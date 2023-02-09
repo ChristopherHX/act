@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"unicode"
 
 	"github.com/nektos/act/pkg/common"
 	"github.com/nektos/act/pkg/container"
@@ -253,4 +254,106 @@ func mergeIntoMap(target *map[string]string, maps ...map[string]string) {
 			(*target)[k] = v
 		}
 	}
+}
+
+func mergeSingleMapIntoMapCaseInsensitive(lookUp *map[string]string, target *map[string]string, m map[string]string) {
+	for k, v := range m {
+		foldkey := strings.Map(func(r rune) rune {
+			for {
+				next := unicode.SimpleFold(r)
+				if next <= r {
+					return r
+				}
+				r = next
+			}
+		}, k)
+		if m, ok := (*lookUp)[foldkey]; ok {
+			(*target)[m] = v
+		} else {
+			(*lookUp)[foldkey] = k
+			(*target)[k] = v
+		}
+	}
+}
+
+func mergeIntoMapCaseInsensitive(target *map[string]string, maps ...map[string]string) {
+	lookUp := map[string]string{}
+	// Need to initialize the lookUp table
+	mergeSingleMapIntoMapCaseInsensitive(&lookUp, target, *target)
+	for _, m := range maps {
+		mergeSingleMapIntoMapCaseInsensitive(&lookUp, target, m)
+	}
+}
+
+type Map[K comparable, V any] interface {
+	Set(key K, val V)
+	Get(key K) V
+	AsNative() map[K]V
+}
+
+type CaseInsensitiveMap[V any] struct {
+	lookUp map[string]string
+	Native map[string]V
+}
+
+func (m *CaseInsensitiveMap[V]) getKey(key string) string {
+	return strings.Map(func(r rune) rune {
+		for {
+			next := unicode.SimpleFold(r)
+			if next <= r {
+				return r
+			}
+			r = next
+		}
+	}, key)
+}
+
+func (m *CaseInsensitiveMap[V]) Set(key string, val V) {
+	foldkey := m.getKey(key)
+	if m.Native == nil {
+		m.Native = map[string]V{}
+	}
+	if fk, ok := m.lookUp[foldkey]; ok {
+		m.Native[fk] = val
+	} else {
+		if m.lookUp == nil {
+			m.lookUp = map[string]string{}
+		}
+		m.lookUp[foldkey] = key
+		m.Native[key] = val
+	}
+}
+
+func (m *CaseInsensitiveMap[V]) Get(key string) V {
+	foldkey := m.getKey(key)
+	if m.Native == nil {
+		m.Native = map[string]V{}
+	}
+	if fk, ok := m.lookUp[foldkey]; ok {
+		return m.Native[fk]
+	}
+	return m.Native[key]
+}
+
+func (m *CaseInsensitiveMap[V]) AsNative() map[string]V {
+	return m.Native
+}
+
+type RegularMap[K comparable, V any] struct {
+	Native map[K]V
+}
+
+func (m *RegularMap[K, V]) Set(key K, val V) {
+	if m.Native == nil {
+		m.Native = map[K]V{}
+	}
+	m.Native[key] = val
+}
+
+func (m *RegularMap[K, V]) Get(key K) V {
+	return m.Native[key]
+}
+
+func (m *RegularMap[K, V]) AsNative() map[K]V {
+	return m.Native
 }

@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/nektos/act/pkg/common"
@@ -67,6 +68,76 @@ func TestMergeIntoMap(t *testing.T) {
 			assert.Equal(t, tt.expected, tt.target)
 		})
 	}
+}
+
+func TestMergeIntoMapCaseInsensitive(t *testing.T) {
+	table := []struct {
+		name     string
+		target   map[string]string
+		maps     []map[string]string
+		expected map[string]string
+	}{
+		{
+			name:     "testEmptyMap",
+			target:   map[string]string{},
+			maps:     []map[string]string{},
+			expected: map[string]string{},
+		},
+		{
+			name:   "testMergeIntoEmptyMap",
+			target: map[string]string{},
+			maps: []map[string]string{
+				{
+					"key1": "value1",
+					"key2": "value2",
+					"KEY4": "value0",
+				}, {
+					"keY2": "overridden",
+					"key3": "value3",
+					"key4": "value3",
+				},
+			},
+			expected: map[string]string{
+				"key1": "value1",
+				"key2": "overridden",
+				"key3": "value3",
+				"KEY4": "value3",
+			},
+		},
+		{
+			name: "testMergeIntoExistingMap",
+			target: map[string]string{
+				"KEY1": "value1",
+				"key2": "value2",
+			},
+			maps: []map[string]string{
+				{
+					"key1": "overridden",
+				},
+			},
+			expected: map[string]string{
+				"KEY1": "overridden",
+				"key2": "value2",
+			},
+		},
+	}
+
+	for _, tt := range table {
+		t.Run(tt.name, func(t *testing.T) {
+			mergeIntoMapCaseInsensitive(&tt.target, tt.maps...)
+			assert.Equal(t, tt.expected, tt.target)
+		})
+	}
+}
+
+func TestMap(t *testing.T) {
+	var m Map[string, string] = &CaseInsensitiveMap[string]{}
+	m.Set("PATH", "somevalue")
+	val := m.Get("Path")
+	fmt.Println(val)
+	// for k, v := range m.AsNative() {
+
+	// }
 }
 
 type stepMock struct {
