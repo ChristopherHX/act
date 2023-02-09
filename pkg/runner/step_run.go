@@ -15,6 +15,7 @@ type stepRun struct {
 	Step       *model.Step
 	RunContext *RunContext
 	cmd        []string
+	cmdline    string
 	env        map[string]string
 }
 
@@ -31,6 +32,9 @@ func (sr *stepRun) main() common.Executor {
 		sr.setupShellCommandExecutor(),
 		func(ctx context.Context) error {
 			sr.getRunContext().ApplyExtraPath(ctx, &sr.env)
+			if he, ok := sr.getRunContext().JobContainer.(*container.HostEnvironment); ok && he != nil {
+				return he.ExecWithCmdLine(sr.cmd, sr.cmdline, sr.env, "", sr.Step.WorkingDirectory)(ctx)
+			}
 			return sr.getRunContext().JobContainer.Exec(sr.cmd, sr.env, "", sr.Step.WorkingDirectory)(ctx)
 		},
 	))
@@ -132,7 +136,8 @@ func (sr *stepRun) setupShellCommand(ctx context.Context) (name, script string, 
 
 	rc := sr.getRunContext()
 	scriptPath := fmt.Sprintf("%s/%s", rc.JobContainer.GetActPath(), name)
-	sr.cmd, err = shellquote.Split(strings.Replace(scCmd, `{0}`, scriptPath, 1))
+	sr.cmdline = strings.Replace(scCmd, `{0}`, scriptPath, 1)
+	sr.cmd, err = shellquote.Split(sr.cmdline)
 
 	return name, script, err
 }
