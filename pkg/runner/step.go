@@ -288,6 +288,7 @@ func mergeIntoMapCaseInsensitive(target *map[string]string, maps ...map[string]s
 type Map[K comparable, V any] interface {
 	Set(key K, val V)
 	Get(key K) V
+	TryGet(key K) (V, bool)
 	AsNative() map[K]V
 }
 
@@ -325,6 +326,11 @@ func (m *CaseInsensitiveMap[V]) Set(key string, val V) {
 }
 
 func (m *CaseInsensitiveMap[V]) Get(key string) V {
+	v, _ := m.TryGet(key)
+	return v
+}
+
+func (m *CaseInsensitiveMap[V]) TryGet(key string) (V, bool) {
 	foldkey := m.getKey(key)
 	if m.Native == nil {
 		m.Native = map[string]V{}
@@ -352,6 +358,11 @@ func (m *RegularMap[K, V]) Set(key K, val V) {
 
 func (m *RegularMap[K, V]) Get(key K) V {
 	return m.Native[key]
+}
+
+func (m *RegularMap[K, V]) TryGet(key K) (V, bool) {
+	v, ok := m.Native[key]
+	return v, ok
 }
 
 func (m *RegularMap[K, V]) AsNative() map[K]V {
