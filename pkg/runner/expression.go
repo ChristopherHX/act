@@ -55,12 +55,12 @@ func (rc *RunContext) NewExpressionEvaluatorWithEnv(ctx context.Context, env map
 		Job:    rc.getJobContext(),
 		// todo: should be unavailable
 		// but required to interpolate/evaluate the step outputs on the job
-		Steps:    rc.getStepsContext(),
-		Secrets:  getWorkflowSecrets(ctx, rc),
-		Strategy: strategy,
-		Matrix:   rc.Matrix,
-		Needs:    using,
-		Inputs:   inputs,
+		Steps:       rc.getStepsContext(),
+		Secrets:     getWorkflowSecrets(ctx, rc),
+		Strategy:    strategy,
+		Matrix:      rc.Matrix,
+		Needs:       using,
+		Inputs:      inputs,
 		ContextData: rc.ContextData,
 	}
 	if rc.JobContainer != nil {
