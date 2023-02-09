@@ -14,7 +14,7 @@ import (
 type stepDocker struct {
 	Step       *model.Step
 	RunContext *RunContext
-	env        map[string]string
+	env        Map[string, string]
 }
 
 func (sd *stepDocker) pre() common.Executor {
@@ -24,7 +24,7 @@ func (sd *stepDocker) pre() common.Executor {
 }
 
 func (sd *stepDocker) main() common.Executor {
-	sd.env = map[string]string{}
+	sd.env = &RegularMap[string, string]{}
 
 	return runStepExecutor(sd, stepStageMain, sd.runUsesContainer())
 }
@@ -47,8 +47,8 @@ func (sd *stepDocker) getStepModel() *model.Step {
 	return sd.Step
 }
 
-func (sd *stepDocker) getEnv() *map[string]string {
-	return &sd.env
+func (sd *stepDocker) getEnv() Map[string, string] {
+	return sd.env
 }
 
 func (sd *stepDocker) getIfExpression(context context.Context, stage stepStage) string {

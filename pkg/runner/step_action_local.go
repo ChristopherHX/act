@@ -19,7 +19,7 @@ type stepActionLocal struct {
 	compositeSteps      *compositeSteps
 	runAction           runAction
 	readAction          readAction
-	env                 map[string]string
+	env                 Map[string, string]
 	action              *model.Action
 }
 
@@ -81,8 +81,8 @@ func (sal *stepActionLocal) getStepModel() *model.Step {
 	return sal.Step
 }
 
-func (sal *stepActionLocal) getEnv() *map[string]string {
-	return &sal.env
+func (sal *stepActionLocal) getEnv() Map[string, string] {
+	return sal.env
 }
 
 func (sal *stepActionLocal) getIfExpression(context context.Context, stage stepStage) string {
