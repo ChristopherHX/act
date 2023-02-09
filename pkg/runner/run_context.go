@@ -297,10 +297,10 @@ func (rc *RunContext) execJobContainer(cmd []string, env map[string]string, user
 	}
 }
 
-func (rc *RunContext) ApplyExtraPath(ctx context.Context, env *map[string]string) {
+func (rc *RunContext) ApplyExtraPath(ctx context.Context, env Map[string,string]) {
 	if rc.ExtraPath != nil && len(rc.ExtraPath) > 0 {
 		path := rc.JobContainer.GetPathVariableName()
-		if (*env)[path] == "" {
+		if env.Get(path) == "" {
 			cenv := map[string]string{}
 			var cpath string
 			if err := rc.JobContainer.UpdateFromImageEnv(&cenv)(ctx); err == nil {
@@ -311,9 +311,9 @@ func (rc *RunContext) ApplyExtraPath(ctx context.Context, env *map[string]string
 			if len(cpath) == 0 {
 				cpath = rc.JobContainer.DefaultPathVariable()
 			}
-			(*env)[path] = cpath
+			env.Set(path, cpath)
 		}
-		(*env)[path] = rc.JobContainer.JoinPathVariable(append(rc.ExtraPath, (*env)[path])...)
+		env.Set(path, rc.JobContainer.JoinPathVariable(append(rc.ExtraPath, env.Get(path))...))
 	}
 }
 

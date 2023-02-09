@@ -26,7 +26,7 @@ type stepActionRemote struct {
 	readAction          readAction
 	runAction           runAction
 	action              *model.Action
-	env                 map[string]string
+	env                 Map[string, string]
 	remoteAction        *remoteAction
 }
 
@@ -158,8 +158,8 @@ func (sar *stepActionRemote) getStepModel() *model.Step {
 	return sar.Step
 }
 
-func (sar *stepActionRemote) getEnv() *map[string]string {
-	return &sar.env
+func (sar *stepActionRemote) getEnv() Map[string, string] {
+	return sar.env
 }
 
 func (sar *stepActionRemote) getIfExpression(ctx context.Context, stage stepStage) string {

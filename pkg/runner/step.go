@@ -21,7 +21,7 @@ type step interface {
 	getRunContext() *RunContext
 	getGithubContext(ctx context.Context) *model.GithubContext
 	getStepModel() *model.Step
-	getEnv() *map[string]string
+	getEnv() Map[string, string]
 	getIfExpression(context context.Context, stage stepStage) string
 }
 
@@ -336,9 +336,9 @@ func (m *CaseInsensitiveMap[V]) TryGet(key string) (V, bool) {
 		m.Native = map[string]V{}
 	}
 	if fk, ok := m.lookUp[foldkey]; ok {
-		return m.Native[fk]
+		return m.Native[fk], true
 	}
-	return m.Native[key]
+	return m.Native[key], false
 }
 
 func (m *CaseInsensitiveMap[V]) AsNative() map[string]V {

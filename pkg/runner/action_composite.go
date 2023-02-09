@@ -12,8 +12,8 @@ import (
 
 func evaluateCompositeInputAndEnv(ctx context.Context, parent *RunContext, step actionStep) map[string]string {
 	env := make(map[string]string)
-	stepEnv := *step.getEnv()
-	for k, v := range stepEnv {
+	stepEnv := step.getEnv()
+	for k, v := range stepEnv.AsNative() {
 		// do not set current inputs into composite action
 		// the required inputs are added in the second loop
 		if !strings.HasPrefix(k, "INPUT_") {
@@ -30,7 +30,7 @@ func evaluateCompositeInputAndEnv(ctx context.Context, parent *RunContext, step 
 		// lookup if key is defined in the step but the the already
 		// evaluated value from the environment
 		_, defined := step.getStepModel().With[inputID]
-		if value, ok := stepEnv[envKey]; defined && ok {
+		if value, ok := stepEnv.TryGet(envKey); defined && ok {
 			env[envKey] = value
 		} else {
 			// defaults could contain expressions

@@ -16,7 +16,7 @@ type stepRun struct {
 	RunContext *RunContext
 	cmd        []string
 	cmdline    string
-	env        map[string]string
+	env        Map[string,string]
 }
 
 func (sr *stepRun) pre() common.Executor {
@@ -26,12 +26,12 @@ func (sr *stepRun) pre() common.Executor {
 }
 
 func (sr *stepRun) main() common.Executor {
-	sr.env = map[string]string{}
+	sr.env = &CaseInsensitiveMap[string]{}
 
 	return runStepExecutor(sr, stepStageMain, common.NewPipelineExecutor(
 		sr.setupShellCommandExecutor(),
 		func(ctx context.Context) error {
-			sr.getRunContext().ApplyExtraPath(ctx, &sr.env)
+			sr.getRunContext().ApplyExtraPath(ctx, sr.env)
 			if he, ok := sr.getRunContext().JobContainer.(*container.HostEnvironment); ok && he != nil {
 				return he.ExecWithCmdLine(sr.cmd, sr.cmdline, sr.env, "", sr.Step.WorkingDirectory)(ctx)
 			}
