@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
@@ -33,6 +34,7 @@ type Config struct {
 	LogOutput                          bool              // log the output from docker run
 	JSONLogger                         bool              // use json or text logger
 	Env                                map[string]string // env for containers
+	Inputs                             map[string]string // manually passed action inputs
 	Secrets                            map[string]string // list of secrets
 	Token                              string            // GitHub token
 	InsecureSecrets                    bool              // switch hiding output when printing to terminal
@@ -51,6 +53,7 @@ type Config struct {
 	ContainerCapDrop                   []string          // list of kernel capabilities to remove from the containers
 	AutoRemove                         bool              // controls if the container is automatically removed upon workflow completion
 	ArtifactServerPath                 string            // the path where the artifact server stores uploads
+	ArtifactServerAddr                 string            // the address the artifact server binds to
 	ArtifactServerPort                 string            // the port the artifact server binds to
 	NoSkipCheckout                     bool              // do not skip actions/checkout
 	RemoteName                         string            // remote name in local git repo config
@@ -91,9 +94,14 @@ func (runnerConfig *Config) GetGitHubInstance() string {
 	return runnerConfig.GitHubInstance
 }
 
+type caller struct {
+	runContext *RunContext
+}
+
 type runnerImpl struct {
 	config    *Config
 	eventJSON string
+	caller    *caller // the job calling this runner (caller of a reusable workflow)
 }
 
 // New Creates a new Runner
@@ -102,14 +110,27 @@ func New(runnerConfig *Config) (Runner, error) {
 		config: runnerConfig,
 	}
 
+	return runner.configure()
+}
+
+func (runner *runnerImpl) configure() (Runner, error) {
 	runner.eventJSON = "{}"
-	if runnerConfig.EventPath != "" {
+	if runner.config.EventPath != "" {
 		log.Debugf("Reading event.json from %s", runner.config.EventPath)
 		eventJSONBytes, err := os.ReadFile(runner.config.EventPath)
 		if err != nil {
 			return nil, err
 		}
 		runner.eventJSON = string(eventJSONBytes)
+	} else if len(runner.config.Inputs) != 0 {
+		eventMap := map[string]map[string]string{
+			"inputs": runner.config.Inputs,
+		}
+		eventJSON, err := json.Marshal(eventMap)
+		if err != nil {
+			return nil, err
+		}
+		runner.eventJSON = string(eventJSON)
 	}
 	return runner, nil
 }
@@ -126,10 +147,6 @@ func (runner *runnerImpl) NewPlanExecutor(plan *model.Plan) common.Executor {
 			for _, run := range stage.Runs {
 				stageExecutor := make([]common.Executor, 0)
 				job := run.Job()
-
-				if job.Uses != "" {
-					return fmt.Errorf("reusable workflows are currently not supported (see https://github.com/nektos/act/issues/826 for updates)")
-				}
 
 				if job.Strategy != nil {
 					strategyRc := runner.newRunContext(ctx, run, nil)
@@ -199,8 +216,10 @@ func (runner *runnerImpl) newRunContext(ctx context.Context, run *model.Run, mat
 		EventJSON:   runner.eventJSON,
 		StepResults: make(map[string]*model.StepResult),
 		Matrix:      matrix,
+		caller:      runner.caller,
 	}
 	rc.ExprEval = rc.NewExpressionEvaluator(ctx)
 	rc.Name = rc.ExprEval.Interpolate(ctx, run.String())
+
 	return rc
 }

@@ -13,17 +13,22 @@ import (
 )
 
 type EvaluationEnvironment struct {
-	Github      *model.GithubContext
-	Env         map[string]string
-	Job         *model.JobContext
-	Steps       map[string]*model.StepResult
-	Runner      map[string]interface{}
-	Secrets     map[string]string
-	Strategy    map[string]interface{}
-	Matrix      map[string]interface{}
-	Needs       map[string]map[string]map[string]string
-	Inputs      map[string]interface{}
+	Github   *model.GithubContext
+	Env      map[string]string
+	Job      *model.JobContext
+	Steps    map[string]*model.StepResult
+	Runner   map[string]interface{}
+	Secrets  map[string]string
+	Strategy map[string]interface{}
+	Matrix   map[string]interface{}
+	Needs    map[string]Needs
+	Inputs   map[string]interface{}
 	ContextData map[string]interface{}
+}
+
+type Needs struct {
+	Outputs map[string]string `json:"outputs"`
+	Result  string            `json:"result"`
 }
 
 type Config struct {

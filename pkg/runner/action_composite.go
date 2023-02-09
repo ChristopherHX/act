@@ -61,15 +61,16 @@ func newCompositeRunContext(ctx context.Context, parent *RunContext, step action
 				},
 			},
 		},
-		Config:        &configCopy,
-		StepResults:   map[string]*model.StepResult{},
-		JobContainer:  parent.JobContainer,
-		ActionPath:    actionPath,
-		Env:           env,
-		Masks:         parent.Masks,
-		ExtraPath:     parent.ExtraPath,
-		Parent:        parent,
-		EventJSON:     parent.EventJSON,
+		Config:       &configCopy,
+		StepResults:  map[string]*model.StepResult{},
+		JobContainer: parent.JobContainer,
+		ActionPath:   actionPath,
+		Env:          env,
+		GlobalEnv:    parent.GlobalEnv,
+		Masks:        parent.Masks,
+		ExtraPath:    parent.ExtraPath,
+		Parent:       parent,
+		EventJSON:    parent.EventJSON,
 		GHContextData: parent.GHContextData,
 	}
 	if parent.ContextData != nil {
@@ -106,6 +107,14 @@ func execAsComposite(step actionStep) common.Executor {
 
 		rc.Masks = append(rc.Masks, compositeRC.Masks...)
 		rc.ExtraPath = compositeRC.ExtraPath
+		// compositeRC.Env is dirty, contains INPUT_ and merged step env, only rely on compositeRC.GlobalEnv
+		for k, v := range compositeRC.GlobalEnv {
+			rc.Env[k] = v
+			if rc.GlobalEnv == nil {
+				rc.GlobalEnv = map[string]string{}
+			}
+			rc.GlobalEnv[k] = v
+		}
 
 		return err
 	}
