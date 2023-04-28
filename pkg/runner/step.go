@@ -81,6 +81,9 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 			return err
 		}
 
+		cctx := ctx.Value(common.JobCancelCtxVal).(context.Context)
+		rc.Cancelled = cctx != nil && cctx.Err() != nil
+
 		runStep, err := isStepEnabled(ctx, ifExpression, step, stage)
 		if err != nil {
 			stepResult.Conclusion = model.StepStatusFailure
@@ -137,15 +140,28 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 		})(ctx)
 
 		timeout := rc.ExprEval.Interpolate(ctx, stepModel.TimeoutMinutes)
-		timeoutctx := ctx
+		stepCtx, cancelStepCtx := context.WithCancel(ctx)
+		defer cancelStepCtx()
 		if timeout != "" {
 			if timeOutMinutes, err := strconv.ParseInt(timeout, 10, 64); err == nil {
 				var cancelTimeOut context.CancelFunc
-				timeoutctx, cancelTimeOut = context.WithTimeout(ctx, time.Duration(timeOutMinutes)*time.Minute)
+				stepCtx, cancelTimeOut = context.WithTimeout(stepCtx, time.Duration(timeOutMinutes)*time.Minute)
 				defer cancelTimeOut()
 			}
 		}
-		err = executor(timeoutctx)
+		if !rc.Cancelled && cctx != nil {
+			go func() {
+				select {
+				case <-cctx.Done():
+					keepStepRunning, err := isStepEnabled(ctx, ifExpression, step, stage)
+					if !keepStepRunning || err != nil {
+						cancelStepCtx()
+					}
+				case <-stepCtx.Done():
+				}
+			}()
+		}
+		err = executor(stepCtx)
 
 		if err == nil {
 			logger.WithField("stepResult", stepResult.Outcome).Infof("  \u2705  Success - %s %s", stage, stepString)

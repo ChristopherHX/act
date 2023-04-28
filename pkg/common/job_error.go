@@ -8,6 +8,10 @@ type jobErrorContextKey string
 
 const jobErrorContextKeyVal = jobErrorContextKey("job.error")
 
+type jobCancelCtx string
+
+const JobCancelCtxVal = jobCancelCtx("job.cancel")
+
 // JobError returns the job error for current context if any
 func JobError(ctx context.Context) error {
 	val := ctx.Value(jobErrorContextKeyVal)
