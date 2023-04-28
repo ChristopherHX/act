@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-git/go-billy/v5/helper/polyfill"
 	"github.com/go-git/go-billy/v5/osfs"
@@ -155,7 +156,7 @@ func (cr *containerReference) Exec(command []string, env map[string]string, user
 		common.NewInfoExecutor("%sdocker exec cmd=[%s] user=%s workdir=%s", logPrefix, strings.Join(command, " "), user, workdir),
 		cr.connect(),
 		cr.find(),
-		cr.exec(command, env, user, workdir),
+		cr.execExt(command, env, user, workdir),
 	).IfNot(common.Dryrun)
 }
 
@@ -489,75 +490,100 @@ func (cr *containerReference) extractFromImageEnv(env *map[string]string) common
 	}
 }
 
-func (cr *containerReference) exec(cmd []string, env map[string]string, user, workdir string) common.Executor {
+func (cr *containerReference) exec(ctx context.Context, cmd []string, env map[string]string, user, workdir string) error {
+	logger := common.Logger(ctx)
+	// Fix slashes when running on Windows
+	if runtime.GOOS == "windows" {
+		var newCmd []string
+		for _, v := range cmd {
+			newCmd = append(newCmd, strings.ReplaceAll(v, `\`, `/`))
+		}
+		cmd = newCmd
+	}
+
+	logger.Debugf("Exec command '%s'", cmd)
+	isTerminal := containerAllocateTerminal
+	envList := make([]string, 0)
+	for k, v := range env {
+		envList = append(envList, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	var wd string
+	if workdir != "" {
+		if strings.HasPrefix(workdir, "/") {
+			wd = workdir
+		} else {
+			wd = fmt.Sprintf("%s/%s", cr.input.WorkingDir, workdir)
+		}
+	} else {
+		wd = cr.input.WorkingDir
+	}
+	logger.Debugf("Working directory '%s'", wd)
+
+	idResp, err := cr.cli.ContainerExecCreate(ctx, cr.id, types.ExecConfig{
+		User:         user,
+		Cmd:          cmd,
+		WorkingDir:   wd,
+		Env:          envList,
+		Tty:          isTerminal,
+		AttachStderr: true,
+		AttachStdout: true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create exec: %w", err)
+	}
+
+	resp, err := cr.cli.ContainerExecAttach(ctx, idResp.ID, types.ExecStartCheck{
+		Tty: isTerminal,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to attach to exec: %w", err)
+	}
+	defer resp.Close()
+
+	err = cr.waitForCommand(ctx, isTerminal, resp, idResp, user, workdir)
+	if err != nil {
+		return err
+	}
+
+	inspectResp, err := cr.cli.ContainerExecInspect(ctx, idResp.ID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect exec: %w", err)
+	}
+
+	switch inspectResp.ExitCode {
+	case 0:
+		return nil
+	case 127:
+		return fmt.Errorf("exitcode '%d': command not found, please refer to https://github.com/nektos/act/issues/107 for more information", inspectResp.ExitCode)
+	default:
+		return fmt.Errorf("exitcode '%d': failure", inspectResp.ExitCode)
+	}
+}
+
+func (cr *containerReference) execExt(cmd []string, env map[string]string, user, workdir string) common.Executor {
 	return func(ctx context.Context) error {
 		logger := common.Logger(ctx)
-		// Fix slashes when running on Windows
-		if runtime.GOOS == "windows" {
-			var newCmd []string
-			for _, v := range cmd {
-				newCmd = append(newCmd, strings.ReplaceAll(v, `\`, `/`))
+		done := make(chan error)
+		go func() {
+			defer func() {
+				done <- errors.New("Invalid Operation")
+			}()
+			done <- cr.exec(ctx, cmd, env, user, workdir)
+		}()
+		select {
+		case <-ctx.Done():
+			timed, canclTimed := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer canclTimed()
+			err := cr.cli.ContainerKill(timed, cr.id, "kill")
+			if err != nil {
+				logger.Error(err)
 			}
-			cmd = newCmd
-		}
-
-		logger.Debugf("Exec command '%s'", cmd)
-		isTerminal := containerAllocateTerminal
-		envList := make([]string, 0)
-		for k, v := range env {
-			envList = append(envList, fmt.Sprintf("%s=%s", k, v))
-		}
-
-		var wd string
-		if workdir != "" {
-			if strings.HasPrefix(workdir, "/") {
-				wd = workdir
-			} else {
-				wd = fmt.Sprintf("%s/%s", cr.input.WorkingDir, workdir)
-			}
-		} else {
-			wd = cr.input.WorkingDir
-		}
-		logger.Debugf("Working directory '%s'", wd)
-
-		idResp, err := cr.cli.ContainerExecCreate(ctx, cr.id, types.ExecConfig{
-			User:         user,
-			Cmd:          cmd,
-			WorkingDir:   wd,
-			Env:          envList,
-			Tty:          isTerminal,
-			AttachStderr: true,
-			AttachStdout: true,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to create exec: %w", err)
-		}
-
-		resp, err := cr.cli.ContainerExecAttach(ctx, idResp.ID, types.ExecStartCheck{
-			Tty: isTerminal,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to attach to exec: %w", err)
-		}
-		defer resp.Close()
-
-		err = cr.waitForCommand(ctx, isTerminal, resp, idResp, user, workdir)
-		if err != nil {
-			return err
-		}
-
-		inspectResp, err := cr.cli.ContainerExecInspect(ctx, idResp.ID)
-		if err != nil {
-			return fmt.Errorf("failed to inspect exec: %w", err)
-		}
-
-		switch inspectResp.ExitCode {
-		case 0:
-			return nil
-		case 127:
-			return fmt.Errorf("exitcode '%d': command not found, please refer to https://github.com/nektos/act/issues/107 for more information", inspectResp.ExitCode)
-		default:
-			return fmt.Errorf("exitcode '%d': failure", inspectResp.ExitCode)
+			cr.start()(timed)
+			logger.Info("This step was cancelled")
+			return errors.New("This step was cancelled")
+		case ret := <-done:
+			return ret
 		}
 	}
 }
