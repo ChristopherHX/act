@@ -101,26 +101,37 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 
 		// Prepare and clean Runner File Commands
 		actPath := rc.JobContainer.GetActPath()
+
 		outputFileCommand := path.Join("workflow", "outputcmd.txt")
-		stateFileCommand := path.Join("workflow", "statecmd.txt")
-		pathFileCommand := path.Join("workflow", "pathcmd.txt")
-		envFileCommand := path.Join("workflow", "envs.txt")
 		(*step.getEnv())["GITHUB_OUTPUT"] = path.Join(actPath, outputFileCommand)
+
+		stateFileCommand := path.Join("workflow", "statecmd.txt")
 		(*step.getEnv())["GITHUB_STATE"] = path.Join(actPath, stateFileCommand)
+
+		pathFileCommand := path.Join("workflow", "pathcmd.txt")
 		(*step.getEnv())["GITHUB_PATH"] = path.Join(actPath, pathFileCommand)
+
+		envFileCommand := path.Join("workflow", "envs.txt")
 		(*step.getEnv())["GITHUB_ENV"] = path.Join(actPath, envFileCommand)
+
+		summaryFileCommand := path.Join("workflow", "SUMMARY.md")
+		(*step.getEnv())["GITHUB_STEP_SUMMARY"] = path.Join(actPath, summaryFileCommand)
+
 		_ = rc.JobContainer.Copy(actPath, &container.FileEntry{
 			Name: outputFileCommand,
-			Mode: 0666,
+			Mode: 0o666,
 		}, &container.FileEntry{
 			Name: stateFileCommand,
-			Mode: 0666,
+			Mode: 0o666,
 		}, &container.FileEntry{
 			Name: pathFileCommand,
-			Mode: 0666,
+			Mode: 0o666,
 		}, &container.FileEntry{
 			Name: envFileCommand,
 			Mode: 0666,
+		}, &container.FileEntry{
+			Name: summaryFileCommand,
+			Mode: 0o666,
 		})(ctx)
 
 		err = executor(ctx)
@@ -176,7 +187,7 @@ func setupEnv(ctx context.Context, step step) error {
 
 	mergeEnv(ctx, step)
 	// merge step env last, since it should not be overwritten
-	mergeIntoMap(step.getEnv(), step.getStepModel().GetEnv())
+	mergeIntoMap(step, step.getEnv(), step.getStepModel().GetEnv())
 
 	exprEval := rc.NewExpressionEvaluator(ctx)
 	for k, v := range *step.getEnv() {
@@ -205,9 +216,9 @@ func mergeEnv(ctx context.Context, step step) {
 
 	c := job.Container()
 	if c != nil {
-		mergeIntoMap(env, rc.GetEnv(), c.Env)
+		mergeIntoMap(step, env, rc.GetEnv(), c.Env)
 	} else {
-		mergeIntoMap(env, rc.GetEnv())
+		mergeIntoMap(step, env, rc.GetEnv())
 	}
 
 	rc.withGithubEnv(ctx, step.getGithubContext(ctx), *env)
@@ -247,10 +258,38 @@ func isContinueOnError(ctx context.Context, expr string, step step, stage stepSt
 	return continueOnError, nil
 }
 
-func mergeIntoMap(target *map[string]string, maps ...map[string]string) {
+func mergeIntoMap(step step, target *map[string]string, maps ...map[string]string) {
+	if rc := step.getRunContext(); rc != nil && rc.JobContainer != nil && rc.JobContainer.IsEnvironmentCaseInsensitive() {
+		mergeIntoMapCaseInsensitive(*target, maps...)
+	} else {
+		mergeIntoMapCaseSensitive(*target, maps...)
+	}
+}
+
+func mergeIntoMapCaseSensitive(target map[string]string, maps ...map[string]string) {
 	for _, m := range maps {
 		for k, v := range m {
-			(*target)[k] = v
+			target[k] = v
+		}
+	}
+}
+
+func mergeIntoMapCaseInsensitive(target map[string]string, maps ...map[string]string) {
+	foldKeys := make(map[string]string, len(target))
+	for k := range target {
+		foldKeys[strings.ToLower(k)] = k
+	}
+	toKey := func(s string) string {
+		foldKey := strings.ToLower(s)
+		if k, ok := foldKeys[foldKey]; ok {
+			return k
+		}
+		foldKeys[strings.ToLower(foldKey)] = s
+		return s
+	}
+	for _, m := range maps {
+		for k, v := range m {
+			target[toKey(k)] = v
 		}
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/kballard/go-shellquote"
+
 	"github.com/nektos/act/pkg/common"
 	"github.com/nektos/act/pkg/container"
 	"github.com/nektos/act/pkg/model"
@@ -30,6 +31,7 @@ type actionStep interface {
 type readAction func(ctx context.Context, step *model.Step, actionDir string, actionPath string, readFile actionYamlReader, writeFile fileWriter) (*model.Action, error)
 
 type actionYamlReader func(filename string) (io.Reader, io.Closer, error)
+
 type fileWriter func(filename string, data []byte, perm fs.FileMode) error
 
 type runAction func(step actionStep, actionDir string, remoteAction *remoteAction) common.Executor
@@ -61,7 +63,7 @@ func readActionImpl(ctx context.Context, step *model.Step, actionDir string, act
 					if b, err = trampoline.ReadFile("res/trampoline.js"); err != nil {
 						return nil, err
 					}
-					err2 := writeFile(filepath.Join(actionDir, actionPath, "trampoline.js"), b, 0400)
+					err2 := writeFile(filepath.Join(actionDir, actionPath, "trampoline.js"), b, 0o400)
 					if err2 != nil {
 						return nil, err2
 					}
@@ -317,13 +319,13 @@ func evalDockerArgs(ctx context.Context, step step, action *model.Action, cmd *[
 			inputs[k] = eval.Interpolate(ctx, v)
 		}
 	}
-	mergeIntoMap(step.getEnv(), inputs)
+	mergeIntoMap(step, step.getEnv(), inputs)
 
 	stepEE := rc.NewStepExpressionEvaluator(ctx, step)
 	for i, v := range *cmd {
 		(*cmd)[i] = stepEE.Interpolate(ctx, v)
 	}
-	mergeIntoMap(step.getEnv(), action.Runs.Env)
+	mergeIntoMap(step, step.getEnv(), action.Runs.Env)
 
 	ee := rc.NewStepExpressionEvaluator(ctx, step)
 	for k, v := range *step.getEnv() {
@@ -354,7 +356,10 @@ func newStepContainer(ctx context.Context, step step, image string, cmd []string
 	envList = append(envList, fmt.Sprintf("%s=%s", "RUNNER_TEMP", "/tmp"))
 
 	binds, mounts := rc.GetBindsAndMounts()
-
+	networkMode := fmt.Sprintf("container:%s", rc.jobContainerName())
+	if rc.IsHostEnv(ctx) {
+		networkMode = "default"
+	}
 	stepContainer := container.NewContainer(&container.NewContainerInput{
 		Cmd:         cmd,
 		Entrypoint:  entrypoint,
@@ -365,7 +370,7 @@ func newStepContainer(ctx context.Context, step step, image string, cmd []string
 		Name:        createContainerName(rc.jobContainerName(), stepModel.ID),
 		Env:         envList,
 		Mounts:      mounts,
-		NetworkMode: fmt.Sprintf("container:%s", rc.jobContainerName()),
+		NetworkMode: networkMode,
 		Binds:       binds,
 		Stdout:      logWriter,
 		Stderr:      logWriter,
@@ -470,7 +475,7 @@ func runPreStep(step actionStep) common.Executor {
 			var actionPath string
 			if _, ok := step.(*stepActionRemote); ok {
 				actionPath = newRemoteAction(stepModel.Uses).Path
-				actionDir = fmt.Sprintf("%s/%s", rc.ActionCacheDir(), strings.ReplaceAll(stepModel.Uses, "/", "-"))
+				actionDir = fmt.Sprintf("%s/%s", rc.ActionCacheDir(), safeFilename(stepModel.Uses))
 			} else {
 				actionDir = filepath.Join(rc.Config.Workdir, stepModel.Uses)
 				actionPath = ""
@@ -501,7 +506,10 @@ func runPreStep(step actionStep) common.Executor {
 				step.getCompositeRunContext(ctx)
 			}
 
-			return step.getCompositeSteps().pre(ctx)
+			if steps := step.getCompositeSteps(); steps != nil && steps.pre != nil {
+				return steps.pre(ctx)
+			}
+			return fmt.Errorf("missing steps in composite action")
 
 		default:
 			return nil
@@ -558,7 +566,7 @@ func runPostStep(step actionStep) common.Executor {
 		var actionPath string
 		if _, ok := step.(*stepActionRemote); ok {
 			actionPath = newRemoteAction(stepModel.Uses).Path
-			actionDir = fmt.Sprintf("%s/%s", rc.ActionCacheDir(), strings.ReplaceAll(stepModel.Uses, "/", "-"))
+			actionDir = fmt.Sprintf("%s/%s", rc.ActionCacheDir(), safeFilename(stepModel.Uses))
 		} else {
 			actionDir = filepath.Join(rc.Config.Workdir, stepModel.Uses)
 			actionPath = ""
@@ -590,7 +598,10 @@ func runPostStep(step actionStep) common.Executor {
 				return err
 			}
 
-			return step.getCompositeSteps().post(ctx)
+			if steps := step.getCompositeSteps(); steps != nil && steps.post != nil {
+				return steps.post(ctx)
+			}
+			return fmt.Errorf("missing steps in composite action")
 
 		default:
 			return nil

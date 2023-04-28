@@ -4,7 +4,6 @@ package container
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -152,10 +151,6 @@ func (cr *containerReference) UpdateFromImageEnv(env *map[string]string) common.
 	return cr.extractFromImageEnv(env).IfNot(common.Dryrun)
 }
 
-func (cr *containerReference) UpdateFromPath(env *map[string]string) common.Executor {
-	return cr.extractPath(env).IfNot(common.Dryrun)
-}
-
 func (cr *containerReference) Exec(command []string, env map[string]string, user, workdir string) common.Executor {
 	return common.NewPipelineExecutor(
 		common.NewInfoExecutor("%sdocker exec cmd=[%s] user=%s workdir=%s", logPrefix, strings.Join(command, " "), user, workdir),
@@ -194,9 +189,6 @@ type containerReference struct {
 }
 
 func GetDockerClient(ctx context.Context) (cli client.APIClient, err error) {
-	// TODO: this should maybe need to be a global option, not hidden in here?
-	//       though i'm not sure how that works out when there's another Executor :D
-	//		 I really would like something that works on OSX native for eg
 	dockerHost := os.Getenv("DOCKER_HOST")
 
 	if strings.HasPrefix(dockerHost, "ssh://") {
@@ -353,6 +345,12 @@ func (cr *containerReference) mergeContainerConfigs(ctx context.Context, config 
 		return nil, nil, fmt.Errorf("Cannot parse container options: '%s': '%w'", input.Options, err)
 	}
 
+	if len(copts.netMode.Value()) == 0 {
+		if err = copts.netMode.Set("host"); err != nil {
+			return nil, nil, fmt.Errorf("Cannot parse networkmode=host. This is an internal error and should not happen: '%w'", err)
+		}
+	}
+
 	containerConfig, err := parse(flags, copts, "")
 	if err != nil {
 		return nil, nil, fmt.Errorf("Cannot process container options: '%s': '%w'", input.Options, err)
@@ -492,31 +490,6 @@ func (cr *containerReference) extractFromImageEnv(env *map[string]string) common
 	}
 }
 
-func (cr *containerReference) extractPath(env *map[string]string) common.Executor {
-	localEnv := *env
-	return func(ctx context.Context) error {
-		pathTar, _, err := cr.cli.CopyFromContainer(ctx, cr.id, localEnv["GITHUB_PATH"])
-		if err != nil {
-			return fmt.Errorf("failed to copy from container: %w", err)
-		}
-		defer pathTar.Close()
-
-		reader := tar.NewReader(pathTar)
-		_, err = reader.Next()
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("failed to read tar archive: %w", err)
-		}
-		s := bufio.NewScanner(reader)
-		for s.Scan() {
-			line := s.Text()
-			localEnv["PATH"] = fmt.Sprintf("%s:%s", line, localEnv["PATH"])
-		}
-
-		env = &localEnv
-		return nil
-	}
-}
-
 func (cr *containerReference) exec(cmd []string, env map[string]string, user, workdir string) common.Executor {
 	return func(ctx context.Context) error {
 		logger := common.Logger(ctx)
@@ -613,7 +586,7 @@ func (cr *containerReference) tryReadID(opt string, cbk func(id int)) common.Exe
 		}
 		exp := regexp.MustCompile(`\d+\n`)
 		found := exp.FindString(sid)
-		id, err := strconv.ParseInt(found[:len(found)-1], 10, 32)
+		id, err := strconv.ParseInt(strings.TrimSpace(found), 10, 32)
 		if err != nil {
 			return nil
 		}

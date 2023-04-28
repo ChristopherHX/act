@@ -64,7 +64,9 @@ func TestMergeIntoMap(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			mergeIntoMap(&tt.target, tt.maps...)
+			mergeIntoMapCaseSensitive(tt.target, tt.maps...)
+			assert.Equal(t, tt.expected, tt.target)
+			mergeIntoMapCaseInsensitive(tt.target, tt.maps...)
 			assert.Equal(t, tt.expected, tt.target)
 		})
 	}
@@ -246,7 +248,7 @@ func TestSetupEnv(t *testing.T) {
 		"GITHUB_EVENT_PATH":        "/var/run/act/workflow/event.json",
 		"GITHUB_GRAPHQL_URL":       "https:///api/graphql",
 		"GITHUB_HEAD_REF":          "",
-		"GITHUB_JOB":               "",
+		"GITHUB_JOB":               "1",
 		"GITHUB_RETENTION_DAYS":    "0",
 		"GITHUB_RUN_ID":            "runId",
 		"GITHUB_RUN_NUMBER":        "1",

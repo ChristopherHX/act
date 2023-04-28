@@ -1,6 +1,10 @@
 name: checks
 on: [pull_request, workflow_dispatch]
 
+concurrency:
+  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+
 env:
   ACT_OWNER: ${{ github.repository_owner }}
   ACT_REPOSITORY: ${{ github.repository }}
@@ -15,14 +19,14 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v4
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
       - uses: golangci/golangci-lint-action@v3.4.0
         with:
           version: v1.47.2
-      - uses: megalinter/megalinter/flavors/go@v6.19.0
+      - uses: megalinter/megalinter/flavors/go@v6.22.2
         env:
           DEFAULT_BRANCH: master
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,7 +43,7 @@ jobs:
           fetch-depth: 2
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v2
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v4
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
@@ -54,8 +58,10 @@ jobs:
         uses: ./.github/actions/run-tests
         with:
           upload-logs-name: logs-linux
+      - name: Run act from cli
+        run: go run main.go -P ubuntu-latest=node:16-buster-slim -C ./pkg/runner/testdata/ -W ./basic/push.yml
       - name: Upload Codecov report
-        uses: codecov/codecov-action@v3.1.1
+        uses: codecov/codecov-action@v3.1.3
         with:
           files: coverage.txt
           fail_ci_if_error: true # optional (default = false)
@@ -72,7 +78,7 @@ jobs:
       - uses: actions/checkout@v3
         with:
           fetch-depth: 2
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v4
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true
@@ -87,7 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions/setup-go@v3
+      - uses: actions/setup-go@v4
         with:
           go-version: ${{ env.GO_VERSION }}
           check-latest: true

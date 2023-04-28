@@ -17,9 +17,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/mitchellh/go-homedir"
 	"github.com/opencontainers/selinux/go-selinux"
-	log "github.com/sirupsen/logrus"
 
 	"github.com/nektos/act/pkg/common"
 	"github.com/nektos/act/pkg/container"
@@ -91,6 +89,24 @@ func (rc *RunContext) jobContainerName() string {
 	return createContainerName("act", rc.String())
 }
 
+func getDockerDaemonSocketMountPath(daemonPath string) string {
+	if protoIndex := strings.Index(daemonPath, "://"); protoIndex != -1 {
+		scheme := daemonPath[:protoIndex]
+		if strings.EqualFold(scheme, "npipe") {
+			// linux container mount on windows, use the default socket path of the VM / wsl2
+			return "/var/run/docker.sock"
+		} else if strings.EqualFold(scheme, "unix") {
+			return daemonPath[protoIndex+3:]
+		} else if strings.IndexFunc(scheme, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z')
+		}) == -1 {
+			// unknown protocol use default
+			return "/var/run/docker.sock"
+		}
+	}
+	return daemonPath
+}
+
 // Returns the binds and mounts for the container, resolving paths as appopriate
 func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string) {
 	name := rc.jobContainerName()
@@ -99,8 +115,10 @@ func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string) {
 		rc.Config.ContainerDaemonSocket = "/var/run/docker.sock"
 	}
 
-	binds := []string{
-		fmt.Sprintf("%s:%s", rc.Config.ContainerDaemonSocket, "/var/run/docker.sock"),
+	binds := []string{}
+	if rc.Config.ContainerDaemonSocket != "-" {
+		daemonPath := getDockerDaemonSocketMountPath(rc.Config.ContainerDaemonSocket)
+		binds = append(binds, fmt.Sprintf("%s:%s", daemonPath, "/var/run/docker.sock"))
 	}
 
 	ext := container.LinuxContainerEnvironmentExtensions{}
@@ -158,15 +176,15 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 		_, _ = rand.Read(randBytes)
 		miscpath := filepath.Join(cacheDir, hex.EncodeToString(randBytes))
 		actPath := filepath.Join(miscpath, "act")
-		if err := os.MkdirAll(actPath, 0777); err != nil {
+		if err := os.MkdirAll(actPath, 0o777); err != nil {
 			return err
 		}
 		path := filepath.Join(miscpath, "hostexecutor")
-		if err := os.MkdirAll(path, 0777); err != nil {
+		if err := os.MkdirAll(path, 0o777); err != nil {
 			return err
 		}
 		runnerTmp := filepath.Join(miscpath, "tmp")
-		if err := os.MkdirAll(runnerTmp, 0777); err != nil {
+		if err := os.MkdirAll(runnerTmp, 0o777); err != nil {
 			return err
 		}
 		toolCache := filepath.Join(cacheDir, "tool_cache")
@@ -188,20 +206,22 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 			}
 		}
 		for _, env := range os.Environ() {
-			i := strings.Index(env, "=")
-			if i > 0 {
-				rc.Env[env[0:i]] = env[i+1:]
+			if k, v, ok := strings.Cut(env, "="); ok {
+				// don't override
+				if _, ok := rc.Env[k]; !ok {
+					rc.Env[k] = v
+				}
 			}
 		}
 
 		return common.NewPipelineExecutor(
 			rc.JobContainer.Copy(rc.JobContainer.GetActPath()+"/", &container.FileEntry{
 				Name: "workflow/event.json",
-				Mode: 0644,
+				Mode: 0o644,
 				Body: rc.EventJSON,
 			}, &container.FileEntry{
 				Name: "workflow/envs.txt",
-				Mode: 0666,
+				Mode: 0o666,
 				Body: "",
 			}),
 		)(ctx)
@@ -280,11 +300,11 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			rc.JobContainer.Start(false),
 			rc.JobContainer.Copy(rc.JobContainer.GetActPath()+"/", &container.FileEntry{
 				Name: "workflow/event.json",
-				Mode: 0644,
+				Mode: 0o644,
 				Body: rc.EventJSON,
 			}, &container.FileEntry{
 				Name: "workflow/envs.txt",
-				Mode: 0666,
+				Mode: 0o666,
 				Body: "",
 			}),
 		)(ctx)
@@ -300,6 +320,15 @@ func (rc *RunContext) execJobContainer(cmd []string, env map[string]string, user
 func (rc *RunContext) ApplyExtraPath(ctx context.Context, env *map[string]string) {
 	if rc.ExtraPath != nil && len(rc.ExtraPath) > 0 {
 		path := rc.JobContainer.GetPathVariableName()
+		if rc.JobContainer.IsEnvironmentCaseInsensitive() {
+			// On windows system Path and PATH could also be in the map
+			for k := range *env {
+				if strings.EqualFold(path, k) {
+					path = k
+					break
+				}
+			}
+		}
 		if (*env)[path] == "" {
 			cenv := map[string]string{}
 			var cpath string
@@ -359,10 +388,11 @@ func (rc *RunContext) ActionCacheDir() string {
 	var xdgCache string
 	var ok bool
 	if xdgCache, ok = os.LookupEnv("XDG_CACHE_HOME"); !ok || xdgCache == "" {
-		if home, err := homedir.Dir(); err == nil {
+		if home, err := os.UserHomeDir(); err == nil {
 			xdgCache = filepath.Join(home, ".cache")
 		} else if xdgCache, err = filepath.Abs("."); err != nil {
-			log.Fatal(err)
+			// It's almost impossible to get here, so the temp dir is a good fallback
+			xdgCache = os.TempDir()
 		}
 	}
 	return filepath.Join(xdgCache, "act")
@@ -384,12 +414,16 @@ func (rc *RunContext) interpolateOutputs() common.Executor {
 
 func (rc *RunContext) startContainer() common.Executor {
 	return func(ctx context.Context) error {
-		image := rc.platformImage(ctx)
-		if strings.EqualFold(image, "-self-hosted") {
+		if rc.IsHostEnv(ctx) {
 			return rc.startHostEnvironment()(ctx)
 		}
 		return rc.startJobContainer()(ctx)
 	}
+}
+
+func (rc *RunContext) IsHostEnv(ctx context.Context) bool {
+	image := rc.platformImage(ctx)
+	return strings.EqualFold(image, "-self-hosted")
 }
 
 func (rc *RunContext) stopContainer() common.Executor {
@@ -567,6 +601,7 @@ func (rc *RunContext) getGithubContext(ctx context.Context) *model.GithubContext
 		EventName:        rc.Config.EventName,
 		Action:           rc.CurrentStep,
 		Token:            rc.Config.Token,
+		Job:              rc.Run.JobID,
 		ActionPath:       rc.ActionPath,
 		RepositoryOwner:  rc.Config.Env["GITHUB_REPOSITORY_OWNER"],
 		RetentionDays:    rc.Config.Env["GITHUB_RETENTION_DAYS"],
@@ -634,6 +669,27 @@ func (rc *RunContext) getGithubContext(ctx context.Context) *model.GithubContext
 
 	ghc.SetRefTypeAndName()
 
+	// defaults
+	ghc.ServerURL = rc.Config.GetGitHubServerUrl()
+	ghc.APIURL = rc.Config.GetGitHubApiServerUrl()
+	ghc.GraphQLURL = rc.Config.GetGitHubGraphQlApiServerUrl()
+	// per GHES
+	if rc.Config.GitHubInstance != "github.com" {
+		ghc.ServerURL = fmt.Sprintf("https://%s", rc.Config.GitHubInstance)
+		ghc.APIURL = fmt.Sprintf("https://%s/api/v3", rc.Config.GitHubInstance)
+		ghc.GraphQLURL = fmt.Sprintf("https://%s/api/graphql", rc.Config.GitHubInstance)
+	}
+	// allow to be overridden by user
+	if rc.Config.Env["GITHUB_SERVER_URL"] != "" {
+		ghc.ServerURL = rc.Config.Env["GITHUB_SERVER_URL"]
+	}
+	if rc.Config.Env["GITHUB_API_URL"] != "" {
+		ghc.APIURL = rc.Config.Env["GITHUB_API_URL"]
+	}
+	if rc.Config.Env["GITHUB_GRAPHQL_URL"] != "" {
+		ghc.GraphQLURL = rc.Config.Env["GITHUB_GRAPHQL_URL"]
+	}
+
 	return ghc
 }
 
@@ -700,17 +756,16 @@ func (rc *RunContext) withGithubEnv(ctx context.Context, github *model.GithubCon
 	env["GITHUB_REF_NAME"] = github.RefName
 	env["GITHUB_REF_TYPE"] = github.RefType
 	env["GITHUB_TOKEN"] = github.Token
-	env["GITHUB_JOB"] = rc.JobName
+	env["GITHUB_JOB"] = github.Job
 	env["GITHUB_REPOSITORY_OWNER"] = github.RepositoryOwner
 	env["GITHUB_RETENTION_DAYS"] = github.RetentionDays
 	env["RUNNER_PERFLOG"] = github.RunnerPerflog
 	env["RUNNER_TRACKING_ID"] = github.RunnerTrackingID
 	env["GITHUB_BASE_REF"] = github.BaseRef
 	env["GITHUB_HEAD_REF"] = github.HeadRef
-
-	env["GITHUB_SERVER_URL"] = rc.Config.GetGitHubServerUrl()
-	env["GITHUB_API_URL"] = rc.Config.GetGitHubApiServerUrl()
-	env["GITHUB_GRAPHQL_URL"] = rc.Config.GetGitHubGraphQlApiServerUrl()
+	env["GITHUB_SERVER_URL"] = github.ServerURL
+	env["GITHUB_API_URL"] = github.APIURL
+	env["GITHUB_GRAPHQL_URL"] = github.GraphQLURL
 
 	if rc.Config.ArtifactServerPath != "" {
 		setActionRuntimeVars(rc, env)

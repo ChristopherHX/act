@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mitchellh/go-homedir"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -126,24 +125,15 @@ func loadNoticesEtag() string {
 
 func saveNoticesEtag(etag string) {
 	p := etagPath()
-	err := os.WriteFile(p, []byte(strings.TrimSuffix(etag, "\n")), 0600)
+	err := os.WriteFile(p, []byte(strings.TrimSuffix(etag, "\n")), 0o600)
 	if err != nil {
 		log.Debugf("Unable to save etag to %s: %e", p, err)
 	}
 }
 
 func etagPath() string {
-	var xdgCache string
-	var ok bool
-	if xdgCache, ok = os.LookupEnv("XDG_CACHE_HOME"); !ok || xdgCache == "" {
-		if home, err := homedir.Dir(); err == nil {
-			xdgCache = filepath.Join(home, ".cache")
-		} else if xdgCache, err = filepath.Abs("."); err != nil {
-			log.Fatal(err)
-		}
-	}
-	dir := filepath.Join(xdgCache, "act")
-	if err := os.MkdirAll(dir, 0777); err != nil {
+	dir := filepath.Join(CacheHomeDir, "act")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
 		log.Fatal(err)
 	}
 	return filepath.Join(dir, ".notices.etag")

@@ -93,6 +93,10 @@ func execAsComposite(step actionStep) common.Executor {
 
 		steps := step.getCompositeSteps()
 
+		if steps == nil || steps.main == nil {
+			return fmt.Errorf("missing steps in composite action")
+		}
+
 		ctx = WithCompositeLogger(ctx, &compositeRC.Masks)
 
 		err := steps.main(ctx)
@@ -108,13 +112,15 @@ func execAsComposite(step actionStep) common.Executor {
 		rc.Masks = append(rc.Masks, compositeRC.Masks...)
 		rc.ExtraPath = compositeRC.ExtraPath
 		// compositeRC.Env is dirty, contains INPUT_ and merged step env, only rely on compositeRC.GlobalEnv
-		for k, v := range compositeRC.GlobalEnv {
-			rc.Env[k] = v
-			if rc.GlobalEnv == nil {
-				rc.GlobalEnv = map[string]string{}
-			}
-			rc.GlobalEnv[k] = v
+		mergeIntoMap := mergeIntoMapCaseSensitive
+		if rc.JobContainer.IsEnvironmentCaseInsensitive() {
+			mergeIntoMap = mergeIntoMapCaseInsensitive
 		}
+		if rc.GlobalEnv == nil {
+			rc.GlobalEnv = map[string]string{}
+		}
+		mergeIntoMap(rc.GlobalEnv, compositeRC.GlobalEnv)
+		mergeIntoMap(rc.Env, compositeRC.GlobalEnv)
 
 		return err
 	}

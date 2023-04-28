@@ -36,6 +36,9 @@ type GithubContext struct {
 	RetentionDays    string                 `json:"retention_days"`
 	RunnerPerflog    string                 `json:"runner_perflog"`
 	RunnerTrackingID string                 `json:"runner_tracking_id"`
+	ServerURL        string                 `json:"server_url"`
+	APIURL           string                 `json:"api_url"`
+	GraphQLURL       string                 `json:"graphql_url"`
 }
 
 func asString(v interface{}) string {
@@ -103,7 +106,7 @@ func (ghc *GithubContext) SetRef(ctx context.Context, defaultBranch string, repo
 	case "deployment", "deployment_status":
 		ghc.Ref = asString(nestedMapLookup(ghc.Event, "deployment", "ref"))
 	case "release":
-		ghc.Ref = asString(nestedMapLookup(ghc.Event, "release", "tag_name"))
+		ghc.Ref = fmt.Sprintf("refs/tags/%s", asString(nestedMapLookup(ghc.Event, "release", "tag_name")))
 	case "push", "create", "workflow_dispatch":
 		ghc.Ref = asString(ghc.Event["ref"])
 	default:
@@ -183,6 +186,9 @@ func (ghc *GithubContext) SetRefTypeAndName() {
 	} else if strings.HasPrefix(ghc.Ref, "refs/heads/") {
 		refType = "branch"
 		refName = ghc.Ref[len("refs/heads/"):]
+	} else if strings.HasPrefix(ghc.Ref, "refs/pull/") {
+		refType = ""
+		refName = ghc.Ref[len("refs/pull/"):]
 	}
 
 	if ghc.RefType == "" {
