@@ -153,6 +153,7 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 			go func() {
 				select {
 				case <-cctx.Done():
+					rc.Cancelled = true
 					keepStepRunning, err := isStepEnabled(ctx, ifExpression, step, stage)
 					if !keepStepRunning || err != nil {
 						cancelStepCtx()
