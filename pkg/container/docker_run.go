@@ -34,7 +34,6 @@ import (
 	specs "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/Masterminds/semver"
-	"golang.org/x/term"
 
 	"github.com/nektos/act/pkg/common"
 )
@@ -387,7 +386,7 @@ func (cr *containerReference) create(capAdd []string, capDrop []string) common.E
 			return nil
 		}
 		logger := common.Logger(ctx)
-		isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+		isTerminal := containerAllocateTerminal
 		input := cr.input
 
 		config := &container.Config{
@@ -503,7 +502,7 @@ func (cr *containerReference) exec(cmd []string, env map[string]string, user, wo
 		}
 
 		logger.Debugf("Exec command '%s'", cmd)
-		isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+		isTerminal := containerAllocateTerminal
 		envList := make([]string, 0)
 		for k, v := range env {
 			envList = append(envList, fmt.Sprintf("%s=%s", k, v))
@@ -764,7 +763,7 @@ func (cr *containerReference) attach() common.Executor {
 		if err != nil {
 			return fmt.Errorf("failed to attach to container: %w", err)
 		}
-		isTerminal := term.IsTerminal(int(os.Stdout.Fd()))
+		isTerminal := containerAllocateTerminal
 
 		var outWriter io.Writer
 		outWriter = cr.input.Stdout

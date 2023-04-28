@@ -3,8 +3,10 @@ package container
 import (
 	"context"
 	"io"
+	"os"
 
 	"github.com/nektos/act/pkg/common"
+	"golang.org/x/term"
 )
 
 // NewContainerInput the input for the New function
@@ -67,4 +69,14 @@ type NewDockerPullExecutorInput struct {
 	Platform  string
 	Username  string
 	Password  string
+}
+
+var containerAllocateTerminal bool
+
+func init() {
+	containerAllocateTerminal = term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+func SetContainerAllocateTerminal(val bool) {
+	containerAllocateTerminal = val
 }

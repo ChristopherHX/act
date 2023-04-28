@@ -289,7 +289,7 @@ func (e *HostEnvironment) exec(ctx context.Context, command []string, cmdline st
 			tty.Close()
 		}
 	}()
-	if true /* allocate Terminal */ {
+	if containerAllocateTerminal /* allocate Terminal */ {
 		var err error
 		ppty, tty, err = setupPty(cmd, cmdline)
 		if err != nil {
