@@ -74,9 +74,11 @@ func newCompositeRunContext(ctx context.Context, parent *RunContext, step action
 		GHContextData: parent.GHContextData,
 	}
 	if parent.ContextData != nil {
-		compositerc.ContextData = map[string]interface{}{
-			"github":   parent.ContextData["github"],
-			"strategy": parent.ContextData["strategy"],
+		compositerc.ContextData = map[string]interface{}{}
+		for k, v := range parent.ContextData {
+			if !strings.EqualFold("inputs", k) {
+				compositerc.ContextData[k] = v
+			}
 		}
 	}
 	compositerc.ExprEval = compositerc.NewExpressionEvaluator(ctx)

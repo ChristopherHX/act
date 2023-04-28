@@ -13,17 +13,17 @@ import (
 )
 
 type EvaluationEnvironment struct {
-	Github   *model.GithubContext
-	Env      map[string]string
-	Job      *model.JobContext
-	Jobs     *map[string]*model.WorkflowCallResult
-	Steps    map[string]*model.StepResult
-	Runner   map[string]interface{}
-	Secrets  map[string]string
-	Strategy map[string]interface{}
-	Matrix   map[string]interface{}
-	Needs    map[string]Needs
-	Inputs   map[string]interface{}
+	Github      *model.GithubContext
+	Env         map[string]string
+	Job         *model.JobContext
+	Jobs        *map[string]*model.WorkflowCallResult
+	Steps       map[string]*model.StepResult
+	Runner      map[string]interface{}
+	Secrets     map[string]string
+	Strategy    map[string]interface{}
+	Matrix      map[string]interface{}
+	Needs       map[string]Needs
+	Inputs      map[string]interface{}
 	ContextData map[string]interface{}
 }
 
@@ -153,10 +153,17 @@ func (impl *interperterImpl) evaluateNode(exprNode actionlint.ExprNode) (interfa
 func (impl *interperterImpl) evaluateVariable(variableNode *actionlint.VariableNode) (interface{}, error) {
 	lowerName := strings.ToLower(variableNode.Name)
 	if cd, ok := impl.env.ContextData[lowerName]; ok {
-		switch lowerName {
-		case "github":
-			content, _ := json.Marshal(impl.env.Github)
-			_ = json.Unmarshal(content, &cd)
+		if serverPayload, ok := cd.(map[string]interface{}); ok {
+			switch lowerName {
+			case "github":
+				var out map[string]interface{}
+				content, _ := json.Marshal(impl.env.Github)
+				_ = json.Unmarshal(content, &out)
+				for k, v := range serverPayload {
+					out[k] = v
+				}
+				return out, nil
+			}
 		}
 		return cd, nil
 	}
