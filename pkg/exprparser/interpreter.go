@@ -25,6 +25,7 @@ type EvaluationEnvironment struct {
 	Needs       map[string]Needs
 	Inputs      map[string]interface{}
 	ContextData map[string]interface{}
+	Hashfiles   func([]reflect.Value) (interface{}, error)
 }
 
 type Needs struct {
@@ -621,6 +622,9 @@ func (impl *interperterImpl) evaluateFuncCall(funcCallNode *actionlint.FuncCallN
 	case "fromjson":
 		return impl.fromJSON(args[0])
 	case "hashfiles":
+		if impl.env.Hashfiles != nil {
+			return impl.env.Hashfiles(args)
+		}
 		return impl.hashFiles(args...)
 	case "always":
 		return impl.always()

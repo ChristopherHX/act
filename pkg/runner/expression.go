@@ -1,12 +1,19 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"path"
+	"reflect"
 	"regexp"
 	"strings"
+	"time"
+
+	_ "embed"
 
 	"github.com/nektos/act/pkg/common"
+	"github.com/nektos/act/pkg/container"
 	"github.com/nektos/act/pkg/exprparser"
 	"github.com/nektos/act/pkg/model"
 	"gopkg.in/yaml.v3"
@@ -95,6 +102,9 @@ func (rc *RunContext) NewExpressionEvaluatorWithEnv(ctx context.Context, env map
 	}
 }
 
+//go:embed hashfiles/index.js
+var hashfiles string
+
 // NewExpressionEvaluator creates a new evaluator
 func (rc *RunContext) NewStepExpressionEvaluator(ctx context.Context, step step) ExpressionEvaluator {
 	// todo: cleanup EvaluationEnvironment creation
@@ -132,6 +142,63 @@ func (rc *RunContext) NewStepExpressionEvaluator(ctx context.Context, step step)
 		// but required to interpolate/evaluate the inputs in actions/composite
 		Inputs:      inputs,
 		ContextData: rc.ContextData,
+		Hashfiles: func(v []reflect.Value) (interface{}, error) {
+			if rc.JobContainer != nil {
+				timeed, cancel := context.WithTimeout(ctx, time.Minute)
+				defer cancel()
+				name := "workflow/hashfiles/index.js"
+				hout := &bytes.Buffer{}
+				herr := &bytes.Buffer{}
+				patterns := []string{}
+				followSymlink := false
+
+				for i, p := range v {
+					s := p.String()
+					if i == 0 {
+						if strings.HasPrefix(s, "--") {
+							if strings.EqualFold(s, "--follow-symbolic-links") {
+								continue
+							} else {
+								return "", fmt.Errorf("Invalid glob option %s, available option: '--follow-symbolic-links'", s)
+							}
+						}
+					}
+					patterns = append(patterns, s)
+				}
+				env := map[string]string{}
+				for k, v := range rc.Env {
+					env[k] = v
+				}
+				env["patterns"] = strings.Join(patterns, "\n")
+				if followSymlink {
+					env["followSymbolicLinks"] = "true"
+				}
+
+				stdout, stderr := rc.JobContainer.ReplaceLogWriter(hout, herr)
+				rc.JobContainer.Copy(rc.JobContainer.GetActPath(), &container.FileEntry{
+					Name: name,
+					Mode: 0o644,
+					Body: hashfiles,
+				}).
+					Then(rc.execJobContainer([]string{"node", path.Join(rc.JobContainer.GetActPath(), name)},
+						env, "", "")).
+					Finally(func(context.Context) error {
+						rc.JobContainer.ReplaceLogWriter(stdout, stderr)
+						return nil
+					})(timeed)
+				output := hout.String() + "\n" + herr.String()
+				guard := "__OUTPUT__"
+				outstart := strings.Index(output, guard)
+				if outstart != -1 {
+					outstart += len(guard)
+					outend := strings.Index(output[outstart:], guard)
+					if outend != -1 {
+						return output[outstart : outstart+outend], nil
+					}
+				}
+			}
+			return "", nil
+		},
 	}
 	if rc.JobContainer != nil {
 		ee.Runner = rc.JobContainer.GetRunnerContext(ctx)
