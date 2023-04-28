@@ -171,13 +171,15 @@ func (e Executor) IfBool(conditional bool) Executor {
 
 // Finally adds an executor to run after other executor
 func (e Executor) Finally(finally Executor) Executor {
-	return func(ctx context.Context) error {
-		err := e(ctx)
-		err2 := finally(ctx)
-		if err2 != nil {
-			return fmt.Errorf("Error occurred running finally: %v (original error: %v)", err2, err)
-		}
-		return err
+	return func(ctx context.Context) (err error) {
+		defer func() {
+			err2 := finally(ctx)
+			if err2 != nil {
+				err = fmt.Errorf("Error occurred running finally: %v (original error: %v)", err2, err)
+			}
+		}()
+		err = e(ctx)
+		return
 	}
 }
 
