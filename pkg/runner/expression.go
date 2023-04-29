@@ -202,6 +202,7 @@ func (rc *RunContext) NewStepExpressionEvaluator(ctx context.Context, step step)
 	}
 	if rc.JobContainer != nil {
 		ee.Runner = rc.JobContainer.GetRunnerContext(ctx)
+		ee.EnvCaseSens = !rc.JobContainer.IsEnvironmentCaseInsensitive()
 	}
 	return expressionEvaluator{
 		interpreter: exprparser.NewInterpeter(ee, exprparser.Config{

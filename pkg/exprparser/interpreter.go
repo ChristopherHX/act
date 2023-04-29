@@ -26,7 +26,10 @@ type EvaluationEnvironment struct {
 	Inputs      map[string]interface{}
 	ContextData map[string]interface{}
 	Hashfiles   func([]reflect.Value) (interface{}, error)
+	EnvCaseSens bool
 }
+
+type CaseSensitiveDict map[string]string
 
 type Needs struct {
 	Outputs map[string]string `json:"outputs"`
@@ -172,6 +175,9 @@ func (impl *interperterImpl) evaluateVariable(variableNode *actionlint.VariableN
 	case "github":
 		return impl.env.Github, nil
 	case "env":
+		if impl.env.EnvCaseSens {
+			return CaseSensitiveDict(impl.env.Env), nil
+		}
 		return impl.env.Env, nil
 	case "job":
 		return impl.env.Job, nil
@@ -263,6 +269,11 @@ func (impl *interperterImpl) getPropertyValue(left reflect.Value, property strin
 
 	case reflect.Struct:
 		leftType := left.Type()
+		var cd CaseSensitiveDict
+		if leftType == reflect.TypeOf(cd) {
+			cd = left.Interface().(CaseSensitiveDict)
+			return cd[property], nil
+		}
 		for i := 0; i < leftType.NumField(); i++ {
 			jsonName := leftType.Field(i).Tag.Get("json")
 			if jsonName == property {
