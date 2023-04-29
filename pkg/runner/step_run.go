@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/kballard/go-shellquote"
@@ -165,6 +166,12 @@ func (sr *stepRun) setupShell(ctx context.Context) {
 	if rc.Run.Job().Container() != nil {
 		if rc.Run.Job().Container().Image != "" && step.Shell == "" {
 			step.Shell = "sh"
+		}
+	}
+	// Don't use bash on windows by default, if not using a docker container
+	if step.Shell == "" && runtime.GOOS == "windows" {
+		if _, ok := rc.JobContainer.(*container.HostEnvironment); ok {
+			step.Shell = "powershell"
 		}
 	}
 }
