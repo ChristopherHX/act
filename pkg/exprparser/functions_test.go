@@ -37,7 +37,7 @@ func TestFunctionContains(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -66,7 +66,7 @@ func TestFunctionStartsWith(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -95,7 +95,7 @@ func TestFunctionEndsWith(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -109,8 +109,6 @@ func TestFunctionJoin(t *testing.T) {
 		expected interface{}
 		name     string
 	}{
-		{"join(fromJSON('{true: \"b\", \"c\": true, \"d\": false, \"e\": 4544}').*, ',')", "b,true,false,4544", "join-arr-start"},
-		{"join(fromJSON('{\"a\": \"b\", \"c\": true, \"d\": false, \"e\": 4544}').*, ',')", "b,true,false,4544", "join-arr-start"},
 		{"join(fromJSON('[\"a\", \"b\"]'), ',')", "a,b", "join-arr"},
 		{"join('string', ',')", "string", "join-str"},
 		{"join(1, ',')", "1", "join-number"},
@@ -124,7 +122,7 @@ func TestFunctionJoin(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -150,7 +148,7 @@ func TestFunctionToJSON(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -173,7 +171,7 @@ func TestFunctionFromJSON(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -190,7 +188,11 @@ func TestFunctionHashFiles(t *testing.T) {
 		{"hashFiles('**/non-extant-files') }}", "", "hash-non-existing-file"},
 		{"hashFiles('**/non-extant-files', '**/more-non-extant-files') }}", "", "hash-multiple-non-existing-files"},
 		{"hashFiles('./for-hashing-1.txt') }}", "66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18", "hash-single-file"},
-		{"hashFiles('./for-hashing-*') }}", "8e5935e7e13368cd9688fe8f48a0955293676a021562582c7e848dafe13fb046", "hash-multiple-files"},
+		{"hashFiles('./for-hashing-*.txt') }}", "8e5935e7e13368cd9688fe8f48a0955293676a021562582c7e848dafe13fb046", "hash-multiple-files"},
+		{"hashFiles('./for-hashing-*.txt', '!./for-hashing-2.txt') }}", "66a045b452102c59d840ec097d59d9467e13a3f34f6494e539ffd32c1bb35f18", "hash-negative-pattern"},
+		{"hashFiles('./for-hashing-**') }}", "c418ba693753c84115ced0da77f876cddc662b9054f4b129b90f822597ee2f94", "hash-multiple-files-and-directories"},
+		{"hashFiles('./for-hashing-3/**') }}", "6f5696b546a7a9d6d42a449dc9a56bef244aaa826601ef27466168846139d2c2", "hash-nested-directories"},
+		{"hashFiles('./for-hashing-3/**/nested-data.txt') }}", "8ecadfb49f7f978d0a9f3a957e9c8da6cc9ab871f5203b5d9f9d1dc87d8af18c", "hash-nested-directories-2"},
 	}
 
 	env := &EvaluationEnvironment{}
@@ -199,7 +201,7 @@ func TestFunctionHashFiles(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			workdir, err := filepath.Abs("testdata")
 			assert.Nil(t, err)
-			output, err := NewInterpeter(env, Config{WorkingDir: workdir}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{WorkingDir: workdir}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -236,7 +238,7 @@ func TestFunctionFormat(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			if tt.error != nil {
 				assert.Equal(t, tt.error, err.Error())
 			} else {

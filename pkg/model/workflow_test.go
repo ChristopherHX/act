@@ -112,6 +112,10 @@ jobs:
         password: registry-password
       env:
         HOME: /home/user
+      volumes:
+        - my_docker_volume:/volume_mount
+        - /data/my_data
+        - /source/directory:/destination/directory
     runs-on: ubuntu-latest
     steps:
     - uses: ./actions/docker-url
@@ -127,6 +131,36 @@ jobs:
 	assert.Contains(t, container.Env["HOME"], "/home/user")
 	assert.Contains(t, container.Credentials["username"], "registry-username")
 	assert.Contains(t, container.Credentials["password"], "registry-password")
+	assert.ElementsMatch(t, container.Volumes, []string{
+		"my_docker_volume:/volume_mount",
+		"/data/my_data",
+		"/source/directory:/destination/directory",
+	})
+}
+
+func TestReadWorkflow_JobTypes(t *testing.T) {
+	yaml := `
+name: invalid job definition
+
+jobs:
+  default-job:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo
+  remote-reusable-workflow:
+    runs-on: ubuntu-latest
+    uses: remote/repo/.github/workflows/workflow.yml@main
+  local-reusable-workflow:
+    runs-on: ubuntu-latest
+    uses: ./.github/workflows/workflow.yml
+`
+
+	workflow, err := ReadWorkflow(strings.NewReader(yaml))
+	assert.NoError(t, err, "read workflow should succeed")
+	assert.Len(t, workflow.Jobs, 3)
+	assert.Equal(t, workflow.Jobs["default-job"].Type(), JobTypeDefault)
+	assert.Equal(t, workflow.Jobs["remote-reusable-workflow"].Type(), JobTypeReusableWorkflowRemote)
+	assert.Equal(t, workflow.Jobs["local-reusable-workflow"].Type(), JobTypeReusableWorkflowLocal)
 }
 
 func TestReadWorkflow_StepsTypes(t *testing.T) {
@@ -207,7 +241,8 @@ func TestReadWorkflow_Strategy(t *testing.T) {
 	w, err := NewWorkflowPlanner("testdata/strategy/push.yml", true)
 	assert.NoError(t, err)
 
-	p := w.PlanJob("strategy-only-max-parallel")
+	p, err := w.PlanJob("strategy-only-max-parallel")
+	assert.NoError(t, err)
 
 	assert.Equal(t, len(p.Stages), 1)
 	assert.Equal(t, len(p.Stages[0].Runs), 1)
@@ -215,29 +250,38 @@ func TestReadWorkflow_Strategy(t *testing.T) {
 	wf := p.Stages[0].Runs[0].Workflow
 
 	job := wf.Jobs["strategy-only-max-parallel"]
-	assert.Equal(t, job.GetMatrixes(), []map[string]interface{}{{}})
+	matrixes, err := job.GetMatrixes()
+	assert.NoError(t, err)
+	assert.Equal(t, matrixes, []map[string]interface{}{{}})
 	assert.Equal(t, job.Matrix(), map[string][]interface{}(nil))
 	assert.Equal(t, job.Strategy.MaxParallel, 2)
 	assert.Equal(t, job.Strategy.FailFast, true)
 
 	job = wf.Jobs["strategy-only-fail-fast"]
-	assert.Equal(t, job.GetMatrixes(), []map[string]interface{}{{}})
+	matrixes, err = job.GetMatrixes()
+	assert.NoError(t, err)
+	assert.Equal(t, matrixes, []map[string]interface{}{{}})
 	assert.Equal(t, job.Matrix(), map[string][]interface{}(nil))
 	assert.Equal(t, job.Strategy.MaxParallel, 4)
 	assert.Equal(t, job.Strategy.FailFast, false)
 
 	job = wf.Jobs["strategy-no-matrix"]
-	assert.Equal(t, job.GetMatrixes(), []map[string]interface{}{{}})
+	matrixes, err = job.GetMatrixes()
+	assert.NoError(t, err)
+	assert.Equal(t, matrixes, []map[string]interface{}{{}})
 	assert.Equal(t, job.Matrix(), map[string][]interface{}(nil))
 	assert.Equal(t, job.Strategy.MaxParallel, 2)
 	assert.Equal(t, job.Strategy.FailFast, false)
 
 	job = wf.Jobs["strategy-all"]
-	assert.Equal(t, job.GetMatrixes(),
+	matrixes, err = job.GetMatrixes()
+	assert.NoError(t, err)
+	assert.Equal(t, matrixes,
 		[]map[string]interface{}{
 			{"datacenter": "site-c", "node-version": "14.x", "site": "staging"},
 			{"datacenter": "site-c", "node-version": "16.x", "site": "staging"},
 			{"datacenter": "site-d", "node-version": "16.x", "site": "staging"},
+			{"php-version": 5.4},
 			{"datacenter": "site-a", "node-version": "10.x", "site": "prod"},
 			{"datacenter": "site-b", "node-version": "12.x", "site": "dev"},
 		},

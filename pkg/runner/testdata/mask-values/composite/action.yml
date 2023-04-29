@@ -1,0 +1,12 @@
+name: composite
+description: composite
+
+runs:
+  using: composite
+  steps:
+    - run: echo "secret value"
+      shell: bash
+    - run: echo "::add-mask::$(echo "abc" | base64)"
+      shell: bash
+    - run: echo "abc" | base64
+      shell: bash

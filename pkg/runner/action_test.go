@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"io"
 	"io/fs"
 	"strings"
@@ -24,8 +25,8 @@ func TestActionReader(t *testing.T) {
 	yaml := strings.ReplaceAll(`
 name: 'name'
 runs:
-  using: 'node16'
-  main: 'main.js'
+	using: 'node16'
+	main: 'main.js'
 `, "\t", "  ")
 
 	table := []struct {
@@ -43,8 +44,10 @@ runs:
 			expected: &model.Action{
 				Name: "name",
 				Runs: model.ActionRuns{
-					Using: "node16",
-					Main:  "main.js",
+					Using:  "node16",
+					Main:   "main.js",
+					PreIf:  "always()",
+					PostIf: "always()",
 				},
 			},
 		},
@@ -56,8 +59,10 @@ runs:
 			expected: &model.Action{
 				Name: "name",
 				Runs: model.ActionRuns{
-					Using: "node16",
-					Main:  "main.js",
+					Using:  "node16",
+					Main:   "main.js",
+					PreIf:  "always()",
+					PostIf: "always()",
 				},
 			},
 		},
@@ -121,13 +126,124 @@ runs:
 				return nil
 			}
 
-			closerMock.On("Close")
+			if tt.filename != "" {
+				closerMock.On("Close")
+			}
 
-			sc := &StepContext{}
-			action, err := sc.readAction(tt.step, "actionDir", "actionPath", readFile, writeFile)
+			action, err := readActionImpl(context.Background(), tt.step, "actionDir", "actionPath", readFile, writeFile)
 
 			assert.Nil(t, err)
 			assert.Equal(t, tt.expected, action)
+
+			closerMock.AssertExpectations(t)
+		})
+	}
+}
+
+func TestActionRunner(t *testing.T) {
+	table := []struct {
+		name        string
+		step        actionStep
+		expectedEnv map[string]string
+	}{
+		{
+			name: "with-input",
+			step: &stepActionRemote{
+				Step: &model.Step{
+					Uses: "org/repo/path@ref",
+				},
+				RunContext: &RunContext{
+					Config: &Config{},
+					Run: &model.Run{
+						JobID: "job",
+						Workflow: &model.Workflow{
+							Jobs: map[string]*model.Job{
+								"job": {
+									Name: "job",
+								},
+							},
+						},
+					},
+				},
+				action: &model.Action{
+					Inputs: map[string]model.Input{
+						"key": {
+							Default: "default value",
+						},
+					},
+					Runs: model.ActionRuns{
+						Using: "node16",
+					},
+				},
+				env: map[string]string{},
+			},
+			expectedEnv: map[string]string{"INPUT_KEY": "default value"},
+		},
+		{
+			name: "restore-saved-state",
+			step: &stepActionRemote{
+				Step: &model.Step{
+					ID:   "step",
+					Uses: "org/repo/path@ref",
+				},
+				RunContext: &RunContext{
+					ActionPath: "path",
+					Config:     &Config{},
+					Run: &model.Run{
+						JobID: "job",
+						Workflow: &model.Workflow{
+							Jobs: map[string]*model.Job{
+								"job": {
+									Name: "job",
+								},
+							},
+						},
+					},
+					CurrentStep: "post-step",
+					StepResults: map[string]*model.StepResult{
+						"step": {},
+					},
+					IntraActionState: map[string]map[string]string{
+						"step": {
+							"name": "state value",
+						},
+					},
+				},
+				action: &model.Action{
+					Runs: model.ActionRuns{
+						Using: "node16",
+					},
+				},
+				env: map[string]string{},
+			},
+			expectedEnv: map[string]string{"STATE_name": "state value"},
+		},
+	}
+
+	for _, tt := range table {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			cm := &containerMock{}
+			cm.On("CopyDir", "/var/run/act/actions/dir/", "dir/", false).Return(func(ctx context.Context) error { return nil })
+
+			envMatcher := mock.MatchedBy(func(env map[string]string) bool {
+				for k, v := range tt.expectedEnv {
+					if env[k] != v {
+						return false
+					}
+				}
+				return true
+			})
+
+			cm.On("Exec", []string{"node", "/var/run/act/actions/dir/path"}, envMatcher, "", "").Return(func(ctx context.Context) error { return nil })
+
+			tt.step.getRunContext().JobContainer = cm
+
+			err := runActionImpl(tt.step, "dir", newRemoteAction("org/repo/path@ref"))(ctx)
+
+			assert.Nil(t, err)
+			cm.AssertExpectations(t)
 		})
 	}
 }

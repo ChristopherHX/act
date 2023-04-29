@@ -1,82 +1,59 @@
 package runner
 
 import (
+	"archive/tar"
+	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 
-	"github.com/google/shlex"
-	"github.com/google/uuid"
-	"github.com/spf13/pflag"
-
-	"github.com/mitchellh/go-homedir"
-	log "github.com/sirupsen/logrus"
-
-	selinux "github.com/opencontainers/selinux/go-selinux"
+	"github.com/opencontainers/selinux/go-selinux"
 
 	"github.com/nektos/act/pkg/common"
 	"github.com/nektos/act/pkg/container"
+	"github.com/nektos/act/pkg/exprparser"
 	"github.com/nektos/act/pkg/model"
 )
 
 // RunContext contains info about current job
 type RunContext struct {
-	GithubContextBase *string
-	Name              string
-	Config            *Config
-	Matrix            map[string]interface{}
-	Run               *model.Run
-	EventJSON         string
-	Env               map[string]string
-	ExtraPath         []string
-	CurrentStep       string
-	StepResults       map[string]*model.StepResult
-	ExprEval          ExpressionEvaluator
-	JobContainer      container.Container
-	OutputMappings    map[MappableOutput]MappableOutput
-	JobName           string
-	actPath           string
-	Local             bool
-	ActionPath        string
-	ActionRef         string
-	ActionRepository  string
-	Composite         *model.Action
-	Inputs            map[string]interface{}
-	Parent            *RunContext
-	ContextData       map[string]interface{}
+	Name                string
+	Config              *Config
+	Matrix              map[string]interface{}
+	Run                 *model.Run
+	EventJSON           string
+	Env                 map[string]string
+	GlobalEnv           map[string]string // to pass env changes of GITHUB_ENV and set-env correctly, due to dirty Env field
+	ExtraPath           []string
+	CurrentStep         string
+	StepResults         map[string]*model.StepResult
+	IntraActionState    map[string]map[string]string
+	ExprEval            ExpressionEvaluator
+	JobContainer        container.ExecutionsEnvironment
+	OutputMappings      map[MappableOutput]MappableOutput
+	JobName             string
+	ActionPath          string
+	Parent              *RunContext
+	Masks               []string
+	cleanUpJobContainer common.Executor
+	caller              *caller // job calling this RunContext (reusable workflows)
+	ContextData         map[string]interface{}
+	GHContextData       *string
+	Cancelled           bool
 }
 
-func (rc *RunContext) Clone() *RunContext {
-	clone := *rc
-	clone.CurrentStep = ""
-	clone.Composite = nil
-	clone.Inputs = nil
-	clone.StepResults = make(map[string]*model.StepResult)
-	clone.Parent = rc
-	if rc.ContextData != nil {
-		clone.ContextData = map[string]interface{}{
-			"github": rc.ContextData["github"],
-		}
-	}
-	return &clone
-}
-
-func (rc *RunContext) SetActPath(actPath string) {
-	rc.actPath = actPath
-}
-
-func (rc *RunContext) GetActPath() string {
-	if len(rc.actPath) > 0 {
-		return rc.actPath
-	}
-	return "/var/run/act"
+func (rc *RunContext) AddMask(mask string) {
+	rc.Masks = append(rc.Masks, mask)
 }
 
 type MappableOutput struct {
@@ -85,13 +62,25 @@ type MappableOutput struct {
 }
 
 func (rc *RunContext) String() string {
-	return fmt.Sprintf("%s/%s", rc.Run.Workflow.Name, rc.Name)
+	name := fmt.Sprintf("%s/%s", rc.Run.Workflow.Name, rc.Name)
+	if rc.caller != nil {
+		// prefix the reusable workflow with the caller job
+		// this is required to create unique container names
+		name = fmt.Sprintf("%s/%s", rc.caller.runContext.Run.JobID, name)
+	}
+	return name
 }
 
 // GetEnv returns the env for the context
 func (rc *RunContext) GetEnv() map[string]string {
 	if rc.Env == nil {
-		rc.Env = mergeMaps(rc.Config.Env, rc.Run.Workflow.Env, rc.Run.Job().Environment())
+		rc.Env = map[string]string{}
+		if rc.Run != nil && rc.Run.Workflow != nil && rc.Config != nil {
+			job := rc.Run.Job()
+			if job != nil {
+				rc.Env = mergeMaps(rc.Run.Workflow.Env, job.Environment(), rc.Config.Env)
+			}
+		}
 	}
 	rc.Env["ACT"] = "true"
 	return rc.Env
@@ -99,6 +88,24 @@ func (rc *RunContext) GetEnv() map[string]string {
 
 func (rc *RunContext) jobContainerName() string {
 	return createContainerName("act", rc.String())
+}
+
+func getDockerDaemonSocketMountPath(daemonPath string) string {
+	if protoIndex := strings.Index(daemonPath, "://"); protoIndex != -1 {
+		scheme := daemonPath[:protoIndex]
+		if strings.EqualFold(scheme, "npipe") {
+			// linux container mount on windows, use the default socket path of the VM / wsl2
+			return "/var/run/docker.sock"
+		} else if strings.EqualFold(scheme, "unix") {
+			return daemonPath[protoIndex+3:]
+		} else if strings.IndexFunc(scheme, func(r rune) bool {
+			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z')
+		}) == -1 {
+			// unknown protocol use default
+			return "/var/run/docker.sock"
+		}
+	}
+	return daemonPath
 }
 
 // Returns the binds and mounts for the container, resolving paths as appopriate
@@ -109,13 +116,32 @@ func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string) {
 		rc.Config.ContainerDaemonSocket = "/var/run/docker.sock"
 	}
 
-	binds := []string{
-		fmt.Sprintf("%s:%s", rc.Config.ContainerDaemonSocket, "/var/run/docker.sock"),
+	binds := []string{}
+	if rc.Config.ContainerDaemonSocket != "-" {
+		daemonPath := getDockerDaemonSocketMountPath(rc.Config.ContainerDaemonSocket)
+		binds = append(binds, fmt.Sprintf("%s:%s", daemonPath, "/var/run/docker.sock"))
 	}
+
+	ext := container.LinuxContainerEnvironmentExtensions{}
 
 	mounts := map[string]string{
 		"act-toolcache": "/toolcache",
-		name + "-env":   rc.GetActPath(),
+		name + "-env":   ext.GetActPath(),
+	}
+
+	if job := rc.Run.Job(); job != nil {
+		if container := job.Container(); container != nil {
+			for _, v := range container.Volumes {
+				if !strings.Contains(v, ":") || filepath.IsAbs(v) {
+					// Bind anonymous volume or host file.
+					binds = append(binds, v)
+				} else {
+					// Mount existing volume.
+					paths := strings.SplitN(v, ":", 2)
+					mounts[paths[0]] = paths[1]
+				}
+			}
+		}
 	}
 
 	if rc.Config.BindWorkdir {
@@ -126,86 +152,88 @@ func (rc *RunContext) GetBindsAndMounts() ([]string, map[string]string) {
 		if selinux.GetEnabled() {
 			bindModifiers = ":z"
 		}
-		binds = append(binds, fmt.Sprintf("%s:%s%s", rc.Config.Workdir, rc.ContainerWorkdir(), bindModifiers))
+		binds = append(binds, fmt.Sprintf("%s:%s%s", rc.Config.Workdir, ext.ToContainerPath(rc.Config.Workdir), bindModifiers))
 	} else {
-		mounts[name] = rc.ContainerWorkdir()
+		mounts[name] = ext.ToContainerPath(rc.Config.Workdir)
 	}
 
 	return binds, mounts
 }
 
-func (rc *RunContext) startJobContainer() common.Executor {
-	image := rc.platformImage()
-	if image == "-self-hosted" {
-		return func(ctx context.Context) error {
-			rawLogger := common.Logger(ctx).WithField("raw_output", true)
-			logWriter := common.NewLineWriter(rc.commandHandler(ctx), func(s string) bool {
-				if rc.Config.LogOutput {
-					rawLogger.Infof("%s", s)
-				} else {
-					rawLogger.Debugf("%s", s)
-				}
-				return true
-			})
-			cacheDir := rc.ActionCacheDir()
-			miscpath := filepath.Join(cacheDir, uuid.New().String())
-			actPath := filepath.Join(miscpath, "act")
-			if err := os.MkdirAll(actPath, 0777); err != nil {
-				return err
-			}
-			rc.SetActPath(actPath)
-			path := filepath.Join(miscpath, "hostexecutor")
-			if err := os.MkdirAll(path, 0777); err != nil {
-				return err
-			}
-			runnerTmp := filepath.Join(miscpath, "tmp")
-			if err := os.MkdirAll(runnerTmp, 0777); err != nil {
-				return err
-			}
-			rc.JobContainer = &container.HostExecutor{Path: path, CleanUp: func() {
-				os.RemoveAll(miscpath)
-			}, StdOut: logWriter}
-			var copyWorkspace bool
-			var copyToPath string
-			if !rc.Config.BindWorkdir {
-				copyToPath, copyWorkspace = rc.localCheckoutPath()
-				copyToPath = filepath.Join(path, copyToPath)
-			}
-			// Tell act to not change the filepath on windows
-			rc.Local = true
-			rc.Env["RUNNER_TOOL_CACHE"] = filepath.Join(cacheDir, "tool_cache")
-			rc.Env["RUNNER_OS"] = runtime.GOOS
-			rc.Env["RUNNER_ARCH"] = runtime.GOARCH
-			rc.Env["RUNNER_TEMP"] = runnerTmp
-			for _, env := range os.Environ() {
-				i := strings.Index(env, "=")
-				if i > 0 {
-					rc.Env[env[0:i]] = env[i+1:]
-				}
-			}
-
-			return common.NewPipelineExecutor(
-				rc.JobContainer.CopyDir(copyToPath, rc.Config.Workdir+string(filepath.Separator)+".", rc.Config.UseGitIgnore).IfBool(copyWorkspace),
-				rc.JobContainer.Copy(rc.GetActPath()+"/", &container.FileEntry{
-					Name: "workflow/event.json",
-					Mode: 0644,
-					Body: rc.EventJSON,
-				}, &container.FileEntry{
-					Name: "workflow/envs.txt",
-					Mode: 0666,
-					Body: "",
-				}, &container.FileEntry{
-					Name: "workflow/paths.txt",
-					Mode: 0666,
-					Body: "",
-				}),
-			)(ctx)
-		}
-	}
-	hostname := rc.hostname()
-
+func (rc *RunContext) startHostEnvironment() common.Executor {
 	return func(ctx context.Context) error {
-		rawLogger := common.Logger(ctx).WithField("raw_output", true)
+		logger := common.Logger(ctx)
+		rawLogger := logger.WithField("raw_output", true)
+		logWriter := common.NewLineWriter(rc.commandHandler(ctx), func(s string) bool {
+			if rc.Config.LogOutput {
+				rawLogger.Infof("%s", s)
+			} else {
+				rawLogger.Debugf("%s", s)
+			}
+			return true
+		})
+		cacheDir := rc.ActionCacheDir()
+		randBytes := make([]byte, 8)
+		_, _ = rand.Read(randBytes)
+		miscpath := filepath.Join(cacheDir, hex.EncodeToString(randBytes))
+		actPath := filepath.Join(miscpath, "act")
+		if err := os.MkdirAll(actPath, 0o777); err != nil {
+			return err
+		}
+		path := filepath.Join(miscpath, "hostexecutor")
+		if err := os.MkdirAll(path, 0o777); err != nil {
+			return err
+		}
+		runnerTmp := filepath.Join(miscpath, "tmp")
+		if err := os.MkdirAll(runnerTmp, 0o777); err != nil {
+			return err
+		}
+		toolCache := filepath.Join(cacheDir, "tool_cache")
+		rc.JobContainer = &container.HostEnvironment{
+			Path:      path,
+			TmpDir:    runnerTmp,
+			ToolCache: toolCache,
+			Workdir:   rc.Config.Workdir,
+			ActPath:   actPath,
+			CleanUp: func() {
+				os.RemoveAll(miscpath)
+			},
+			StdOut: logWriter,
+		}
+		rc.cleanUpJobContainer = rc.JobContainer.Remove()
+		for k, v := range rc.JobContainer.GetRunnerContext(ctx) {
+			if v, ok := v.(string); ok {
+				rc.Env[fmt.Sprintf("RUNNER_%s", strings.ToUpper(k))] = v
+			}
+		}
+		for _, env := range os.Environ() {
+			if k, v, ok := strings.Cut(env, "="); ok {
+				// don't override
+				if _, ok := rc.Env[k]; !ok {
+					rc.Env[k] = v
+				}
+			}
+		}
+
+		return common.NewPipelineExecutor(
+			rc.JobContainer.Copy(rc.JobContainer.GetActPath()+"/", &container.FileEntry{
+				Name: "workflow/event.json",
+				Mode: 0o644,
+				Body: rc.EventJSON,
+			}, &container.FileEntry{
+				Name: "workflow/envs.txt",
+				Mode: 0o666,
+				Body: "",
+			}),
+		)(ctx)
+	}
+}
+
+func (rc *RunContext) startJobContainer() common.Executor {
+	return func(ctx context.Context) error {
+		logger := common.Logger(ctx)
+		image := rc.platformImage(ctx)
+		rawLogger := logger.WithField("raw_output", true)
 		logWriter := common.NewLineWriter(rc.commandHandler(ctx), func(s string) bool {
 			if rc.Config.LogOutput {
 				rawLogger.Infof("%s", s)
@@ -215,26 +243,38 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			return true
 		})
 
-		username, password, err := rc.handleCredentials()
+		username, password, err := rc.handleCredentials(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to handle credentials: %s", err)
 		}
 
-		common.Logger(ctx).Infof("\U0001f680  Start image=%s", image)
+		logger.Infof("\U0001f680  Start image=%s", image)
 		name := rc.jobContainerName()
 
 		envList := make([]string, 0)
 
 		envList = append(envList, fmt.Sprintf("%s=%s", "RUNNER_TOOL_CACHE", "/opt/hostedtoolcache"))
 		envList = append(envList, fmt.Sprintf("%s=%s", "RUNNER_OS", "Linux"))
+		envList = append(envList, fmt.Sprintf("%s=%s", "RUNNER_ARCH", container.RunnerArch(ctx)))
 		envList = append(envList, fmt.Sprintf("%s=%s", "RUNNER_TEMP", "/tmp"))
+		envList = append(envList, fmt.Sprintf("%s=%s", "LANG", "C.UTF-8")) // Use same locale as GitHub Actions
 
+		ext := container.LinuxContainerEnvironmentExtensions{}
 		binds, mounts := rc.GetBindsAndMounts()
+
+		rc.cleanUpJobContainer = func(ctx context.Context) error {
+			if rc.JobContainer != nil && !rc.Config.ReuseContainers {
+				return rc.JobContainer.Remove().
+					Then(container.NewDockerVolumeRemoveExecutor(rc.jobContainerName(), false)).
+					Then(container.NewDockerVolumeRemoveExecutor(rc.jobContainerName()+"-env", false))(ctx)
+			}
+			return nil
+		}
 
 		rc.JobContainer = container.NewContainer(&container.NewContainerInput{
 			Cmd:         nil,
-			Entrypoint:  []string{"/usr/bin/tail", "-f", "/dev/null"},
-			WorkingDir:  rc.ContainerWorkdir(),
+			Entrypoint:  []string{"tail", "-f", "/dev/null"},
+			WorkingDir:  ext.ToContainerPath(rc.Config.Workdir),
 			Image:       image,
 			Username:    username,
 			Password:    password,
@@ -248,18 +288,10 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			Privileged:  rc.Config.Privileged,
 			UsernsMode:  rc.Config.UsernsMode,
 			Platform:    rc.Config.ContainerArchitecture,
-			Hostname:    hostname,
+			Options:     rc.options(ctx),
 		})
-
 		if rc.JobContainer == nil {
-			return errors.New("failed to create Container")
-		}
-
-		var copyWorkspace bool
-		var copyToPath string
-		if !rc.Config.BindWorkdir {
-			copyToPath, copyWorkspace = rc.localCheckoutPath()
-			copyToPath = filepath.Join(rc.ContainerWorkdir(), copyToPath)
+			return errors.New("Failed to create job container")
 		}
 
 		return common.NewPipelineExecutor(
@@ -267,38 +299,84 @@ func (rc *RunContext) startJobContainer() common.Executor {
 			rc.stopJobContainer(),
 			rc.JobContainer.Create(rc.Config.ContainerCapAdd, rc.Config.ContainerCapDrop),
 			rc.JobContainer.Start(false),
-			rc.JobContainer.UpdateFromImageEnv(&rc.Env),
-			rc.JobContainer.UpdateFromEnv("/etc/environment", &rc.Env),
-			rc.JobContainer.Exec([]string{"mkdir", "-m", "0777", "-p", rc.GetActPath()}, "", rc.Env, "root", ""),
-			rc.JobContainer.CopyDir(copyToPath, rc.Config.Workdir+string(filepath.Separator)+".", rc.Config.UseGitIgnore).IfBool(copyWorkspace),
-			rc.JobContainer.Copy(rc.GetActPath()+"/", &container.FileEntry{
+			rc.JobContainer.Copy(rc.JobContainer.GetActPath()+"/", &container.FileEntry{
 				Name: "workflow/event.json",
-				Mode: 0644,
+				Mode: 0o644,
 				Body: rc.EventJSON,
 			}, &container.FileEntry{
 				Name: "workflow/envs.txt",
-				Mode: 0666,
-				Body: "",
-			}, &container.FileEntry{
-				Name: "workflow/paths.txt",
-				Mode: 0666,
+				Mode: 0o666,
 				Body: "",
 			}),
 		)(ctx)
 	}
 }
-func (rc *RunContext) execJobContainer(cmd []string, cmdline string, env map[string]string, user, workdir string) common.Executor {
+
+func (rc *RunContext) execJobContainer(cmd []string, env map[string]string, user, workdir string) common.Executor {
 	return func(ctx context.Context) error {
-		return rc.JobContainer.Exec(cmd, cmdline, env, user, workdir)(ctx)
+		return rc.JobContainer.Exec(cmd, env, user, workdir)(ctx)
 	}
+}
+
+func (rc *RunContext) ApplyExtraPath(ctx context.Context, env *map[string]string) {
+	if rc.ExtraPath != nil && len(rc.ExtraPath) > 0 {
+		path := rc.JobContainer.GetPathVariableName()
+		if rc.JobContainer.IsEnvironmentCaseInsensitive() {
+			// On windows system Path and PATH could also be in the map
+			for k := range *env {
+				if strings.EqualFold(path, k) {
+					path = k
+					break
+				}
+			}
+		}
+		if (*env)[path] == "" {
+			cenv := map[string]string{}
+			var cpath string
+			if err := rc.JobContainer.UpdateFromImageEnv(&cenv)(ctx); err == nil {
+				if p, ok := cenv[path]; ok {
+					cpath = p
+				}
+			}
+			if len(cpath) == 0 {
+				cpath = rc.JobContainer.DefaultPathVariable()
+			}
+			(*env)[path] = cpath
+		}
+		(*env)[path] = rc.JobContainer.JoinPathVariable(append(rc.ExtraPath, (*env)[path])...)
+	}
+}
+
+func (rc *RunContext) UpdateExtraPath(ctx context.Context, githubEnvPath string) error {
+	if common.Dryrun(ctx) {
+		return nil
+	}
+	pathTar, err := rc.JobContainer.GetContainerArchive(ctx, githubEnvPath)
+	if err != nil {
+		return err
+	}
+	defer pathTar.Close()
+
+	reader := tar.NewReader(pathTar)
+	_, err = reader.Next()
+	if err != nil && err != io.EOF {
+		return err
+	}
+	s := bufio.NewScanner(reader)
+	for s.Scan() {
+		line := s.Text()
+		if len(line) > 0 {
+			rc.addPath(ctx, line)
+		}
+	}
+	return nil
 }
 
 // stopJobContainer removes the job container (if it exists) and its volume (if it exists) if !rc.Config.ReuseContainers
 func (rc *RunContext) stopJobContainer() common.Executor {
 	return func(ctx context.Context) error {
-		if rc.JobContainer != nil && !rc.Config.ReuseContainers {
-			return rc.JobContainer.Remove().
-				Then(container.NewDockerVolumeRemoveExecutor(rc.jobContainerName(), false).Finally(container.NewDockerVolumeRemoveExecutor(rc.jobContainerName()+"-env", false)).If(func(ctx context.Context) bool { return !rc.Local }))(ctx)
+		if rc.cleanUpJobContainer != nil && !rc.Config.ReuseContainers {
+			return rc.cleanUpJobContainer(ctx)
 		}
 		return nil
 	}
@@ -311,10 +389,11 @@ func (rc *RunContext) ActionCacheDir() string {
 	var xdgCache string
 	var ok bool
 	if xdgCache, ok = os.LookupEnv("XDG_CACHE_HOME"); !ok || xdgCache == "" {
-		if home, err := homedir.Dir(); err == nil {
+		if home, err := os.UserHomeDir(); err == nil {
 			xdgCache = filepath.Join(home, ".cache")
 		} else if xdgCache, err = filepath.Abs("."); err != nil {
-			log.Fatal(err)
+			// It's almost impossible to get here, so the temp dir is a good fallback
+			xdgCache = os.TempDir()
 		}
 	}
 	return filepath.Join(xdgCache, "act")
@@ -323,9 +402,9 @@ func (rc *RunContext) ActionCacheDir() string {
 // Interpolate outputs after a job is done
 func (rc *RunContext) interpolateOutputs() common.Executor {
 	return func(ctx context.Context) error {
-		ee := rc.NewExpressionEvaluator()
+		ee := rc.NewExpressionEvaluator(ctx)
 		for k, v := range rc.Run.Job().Outputs {
-			interpolated := ee.Interpolate(v)
+			interpolated := ee.Interpolate(ctx, v)
 			if v != interpolated {
 				rc.Run.Job().Outputs[k] = interpolated
 			}
@@ -335,7 +414,17 @@ func (rc *RunContext) interpolateOutputs() common.Executor {
 }
 
 func (rc *RunContext) startContainer() common.Executor {
-	return rc.startJobContainer()
+	return func(ctx context.Context) error {
+		if rc.IsHostEnv(ctx) {
+			return rc.startHostEnvironment()(ctx)
+		}
+		return rc.startJobContainer()(ctx)
+	}
+}
+
+func (rc *RunContext) IsHostEnv(ctx context.Context) bool {
+	image := rc.platformImage(ctx)
+	return strings.EqualFold(image, "-self-hosted")
 }
 
 func (rc *RunContext) stopContainer() common.Executor {
@@ -365,145 +454,43 @@ func (rc *RunContext) steps() []*model.Step {
 
 // Executor returns a pipeline executor for all the steps in the job
 func (rc *RunContext) Executor() common.Executor {
-	return newJobExecutor(rc).Finally(func(ctx context.Context) error {
-		if rc.JobContainer != nil {
-			ctx := context.Background()
-			if rc.Config.AutoRemove {
-				log.Infof("Cleaning up container for job %s", rc.JobName)
-				if err := rc.stopJobContainer()(ctx); err != nil {
-					log.Errorf("Error while cleaning container: %v", err)
-				}
-			}
-			return rc.JobContainer.Close()(ctx)
+	var executor common.Executor
+
+	switch rc.Run.Job().Type() {
+	case model.JobTypeDefault:
+		executor = newJobExecutor(rc, &stepFactoryImpl{}, rc)
+	case model.JobTypeReusableWorkflowLocal:
+		executor = newLocalReusableWorkflowExecutor(rc)
+	case model.JobTypeReusableWorkflowRemote:
+		executor = newRemoteReusableWorkflowExecutor(rc)
+	}
+
+	return func(ctx context.Context) error {
+		res, err := rc.isEnabled(ctx)
+		if err != nil {
+			return err
+		}
+		if res {
+			return executor(ctx)
 		}
 		return nil
-	}).If(rc.isEnabled)
-}
-
-// Executor returns a pipeline executor for all the steps in the job
-func (rc *RunContext) CompositeExecutor() common.Executor {
-	steps := make([]common.Executor, 0)
-
-	for i, step := range rc.Composite.Runs.Steps {
-		if step.ID == "" {
-			step.ID = fmt.Sprintf("%d", i)
-		}
-		stepcopy := step
-		stepExec := rc.newStepExecutor(&stepcopy)
-		steps = append(steps, func(ctx context.Context) error {
-			err := stepExec(ctx)
-			if err != nil {
-				common.Logger(ctx).Errorf("%v", err)
-				common.SetJobError(ctx, err)
-			} else if ctx.Err() != nil {
-				common.Logger(ctx).Errorf("%v", ctx.Err())
-				common.SetJobError(ctx, ctx.Err())
-			}
-			return nil
-		})
-	}
-
-	steps = append(steps, common.JobError)
-	return func(ctx context.Context) error {
-		return common.NewPipelineExecutor(steps...)(common.WithJobErrorContainer(ctx))
 	}
 }
 
-func (rc *RunContext) newStepExecutor(step *model.Step) common.Executor {
-	sc := &StepContext{
-		RunContext: rc,
-		Step:       step,
-	}
-	return func(ctx context.Context) error {
-		rc.CurrentStep = sc.Step.ID
-		rc.StepResults[rc.CurrentStep] = &model.StepResult{
-			Outcome:    model.StepStatusSuccess,
-			Conclusion: model.StepStatusSuccess,
-			Outputs:    make(map[string]string),
-		}
-
-		runStep, err := sc.isEnabled(ctx)
-		if err != nil {
-			rc.StepResults[rc.CurrentStep].Conclusion = model.StepStatusFailure
-			rc.StepResults[rc.CurrentStep].Outcome = model.StepStatusFailure
-			return err
-		}
-
-		if !runStep {
-			log.Debugf("Skipping step '%s' due to '%s'", sc.Step.String(), sc.Step.If.Value)
-			rc.StepResults[rc.CurrentStep].Conclusion = model.StepStatusSkipped
-			rc.StepResults[rc.CurrentStep].Outcome = model.StepStatusSkipped
-			return nil
-		}
-
-		exprEval, err := sc.setupEnv(ctx)
-		if err != nil {
-			return err
-		}
-		rc.ExprEval = exprEval
-
-		common.Logger(ctx).Infof("\u2B50  Run %s", sc.Step)
-
-		// Prepare and clean Runner File Commands
-		actPath := rc.GetActPath()
-		outputFileCommand := path.Join("workflow", "outputcmd.txt")
-		stateFileCommand := path.Join("workflow", "statecmd.txt")
-		sc.Env["GITHUB_OUTPUT"] = path.Join(actPath, outputFileCommand)
-		sc.Env["GITHUB_STATE"] = path.Join(actPath, stateFileCommand)
-		_ = rc.JobContainer.Copy(actPath, &container.FileEntry{
-			Name: outputFileCommand,
-			Mode: 0666,
-		}, &container.FileEntry{
-			Name: stateFileCommand,
-			Mode: 0666,
-		})(ctx)
-
-		err = sc.Executor(ctx)(ctx)
-		if err == nil {
-			common.Logger(ctx).Infof("  \u2705  Success - %s", sc.Step)
-		} else {
-			common.Logger(ctx).Errorf("  \u274C  Failure - %s", sc.Step)
-
-			rc.StepResults[rc.CurrentStep].Outcome = model.StepStatusFailure
-			if sc.Step.ContinueOnError {
-				common.Logger(ctx).Infof("Failed but continue next step")
-				err = nil
-				rc.StepResults[rc.CurrentStep].Conclusion = model.StepStatusSuccess
-			} else {
-				rc.StepResults[rc.CurrentStep].Conclusion = model.StepStatusFailure
-			}
-		}
-		// Process Runner File Commands
-		orgerr := err
-		output := map[string]string{}
-		err = rc.JobContainer.UpdateFromEnv(path.Join(actPath, outputFileCommand), &output)(ctx)
-		if err != nil {
-			return err
-		}
-		for k, v := range output {
-			rc.setOutput(ctx, map[string]string{"name": k}, v)
-		}
-		if orgerr != nil {
-			return orgerr
-		}
-		return err
-	}
-}
-
-func (rc *RunContext) platformImage() string {
+func (rc *RunContext) platformImage(ctx context.Context) string {
 	job := rc.Run.Job()
 
 	c := job.Container()
 	if c != nil {
-		return rc.ExprEval.Interpolate(c.Image)
+		return rc.ExprEval.Interpolate(ctx, c.Image)
 	}
 
 	if job.RunsOn() == nil {
-		log.Errorf("'runs-on' key not defined in %s", rc.String())
+		common.Logger(ctx).Errorf("'runs-on' key not defined in %s", rc.String())
 	}
 
 	for _, runnerLabel := range job.RunsOn() {
-		platformName := rc.ExprEval.Interpolate(runnerLabel)
+		platformName := rc.ExprEval.Interpolate(ctx, runnerLabel)
 		image := rc.Config.Platforms[strings.ToLower(platformName)]
 		if image != "" {
 			return image
@@ -513,54 +500,45 @@ func (rc *RunContext) platformImage() string {
 	return ""
 }
 
-func (rc *RunContext) hostname() string {
+func (rc *RunContext) options(ctx context.Context) string {
 	job := rc.Run.Job()
 	c := job.Container()
 	if c == nil {
-		return ""
+		return rc.Config.ContainerOptions
 	}
 
-	optionsFlags := pflag.NewFlagSet("container_options", pflag.ContinueOnError)
-	hostname := optionsFlags.StringP("hostname", "h", "", "")
-	optionsArgs, err := shlex.Split(c.Options)
-	if err != nil {
-		log.Warnf("Cannot parse container options: %s", c.Options)
-		return ""
-	}
-	err = optionsFlags.Parse(optionsArgs)
-	if err != nil {
-		log.Warnf("Cannot parse container options: %s", c.Options)
-		return ""
-	}
-	return *hostname
+	return c.Options
 }
 
-func (rc *RunContext) isEnabled(ctx context.Context) bool {
+func (rc *RunContext) isEnabled(ctx context.Context) (bool, error) {
 	job := rc.Run.Job()
 	l := common.Logger(ctx)
-	runJob, err := EvalBool(rc.ExprEval, job.If.Value)
+	runJob, err := EvalBool(ctx, rc.ExprEval, job.If.Value, exprparser.DefaultStatusCheckSuccess)
 	if err != nil {
-		common.Logger(ctx).Errorf("  \u274C  Error in if: expression - %s", job.Name)
-		return false
+		return false, fmt.Errorf("  \u274C  Error in if-expression: \"if: %s\" (%s)", job.If.Value, err)
 	}
 	if !runJob {
-		l.Debugf("Skipping job '%s' due to '%s'", job.Name, job.If.Value)
-		return false
+		l.WithField("jobResult", "skipped").Debugf("Skipping job '%s' due to '%s'", job.Name, job.If.Value)
+		return false, nil
 	}
 
-	img := rc.platformImage()
+	if job.Type() != model.JobTypeDefault {
+		return true, nil
+	}
+
+	img := rc.platformImage(ctx)
 	if img == "" {
 		if job.RunsOn() == nil {
-			log.Errorf("'runs-on' key not defined in %s", rc.String())
+			l.Errorf("'runs-on' key not defined in %s", rc.String())
 		}
 
 		for _, runnerLabel := range job.RunsOn() {
-			platformName := rc.ExprEval.Interpolate(runnerLabel)
+			platformName := rc.ExprEval.Interpolate(ctx, runnerLabel)
 			l.Infof("\U0001F6A7  Skipping unsupported platform -- Try running with `-P %+v=...`", platformName)
 		}
-		return false
+		return false, nil
 	}
-	return true
+	return true, nil
 }
 
 func mergeMaps(maps ...map[string]string) map[string]string {
@@ -574,26 +552,16 @@ func mergeMaps(maps ...map[string]string) map[string]string {
 }
 
 func createContainerName(parts ...string) string {
-	name := make([]string, 0)
+	name := strings.Join(parts, "-")
 	pattern := regexp.MustCompile("[^a-zA-Z0-9]")
-	partLen := (30 / len(parts)) - 1
-	for i, part := range parts {
-		if i == len(parts)-1 {
-			name = append(name, pattern.ReplaceAllString(part, "-"))
-		} else {
-			// If any part has a '-<number>' on the end it is likely part of a matrix job.
-			// Let's preserve the number to prevent clashes in container names.
-			re := regexp.MustCompile("-[0-9]+$")
-			num := re.FindStringSubmatch(part)
-			if len(num) > 0 {
-				name = append(name, trimToLen(pattern.ReplaceAllString(part, "-"), partLen-len(num[0])))
-				name = append(name, num[0])
-			} else {
-				name = append(name, trimToLen(pattern.ReplaceAllString(part, "-"), partLen))
-			}
-		}
-	}
-	return strings.ReplaceAll(strings.Trim(strings.Join(name, "-"), "-"), "--", "-")
+	name = pattern.ReplaceAllString(name, "-")
+	name = strings.ReplaceAll(name, "--", "-")
+	hash := sha256.Sum256([]byte(name))
+
+	// SHA256 is 64 hex characters. So trim name to 63 characters to make room for the hash and separator
+	trimmedName := strings.Trim(trimToLen(name, 63), "-")
+
+	return fmt.Sprintf("%s-%x", trimmedName, hash)
 }
 
 func trimToLen(s string, l int) string {
@@ -608,10 +576,14 @@ func trimToLen(s string, l int) string {
 
 func (rc *RunContext) getJobContext() *model.JobContext {
 	jobStatus := "success"
-	for _, stepStatus := range rc.StepResults {
-		if stepStatus.Conclusion == model.StepStatusFailure {
-			jobStatus = "failure"
-			break
+	if rc.Cancelled {
+		jobStatus = "cancelled"
+	} else {
+		for _, stepStatus := range rc.StepResults {
+			if stepStatus.Conclusion == model.StepStatusFailure {
+				jobStatus = "failure"
+				break
+			}
 		}
 	}
 	return &model.JobContext{
@@ -623,37 +595,45 @@ func (rc *RunContext) getStepsContext() map[string]*model.StepResult {
 	return rc.StepResults
 }
 
-func (rc *RunContext) getGithubContext() *model.GithubContext {
+func (rc *RunContext) getGithubContext(ctx context.Context) *model.GithubContext {
+	logger := common.Logger(ctx)
 	ghc := &model.GithubContext{
 		Event:            make(map[string]interface{}),
-		EventPath:        rc.GetActPath() + "/workflow/event.json",
 		Workflow:         rc.Run.Workflow.Name,
 		RunID:            rc.Config.Env["GITHUB_RUN_ID"],
 		RunNumber:        rc.Config.Env["GITHUB_RUN_NUMBER"],
 		RunAttempt:       rc.Config.Env["GITHUB_RUN_ATTEMPT"],
 		Actor:            rc.Config.Actor,
 		EventName:        rc.Config.EventName,
-		Workspace:        rc.ContainerWorkdir(),
 		Action:           rc.CurrentStep,
-		Token:            rc.Config.Secrets["GITHUB_TOKEN"],
+		Token:            rc.Config.Token,
+		Job:              rc.Run.JobID,
 		ActionPath:       rc.ActionPath,
-		ActionRef:        rc.ActionRef,
-		ActionRepository: rc.ActionRepository,
 		RepositoryOwner:  rc.Config.Env["GITHUB_REPOSITORY_OWNER"],
 		RetentionDays:    rc.Config.Env["GITHUB_RETENTION_DAYS"],
 		RunnerPerflog:    rc.Config.Env["RUNNER_PERFLOG"],
 		RunnerTrackingID: rc.Config.Env["RUNNER_TRACKING_ID"],
+		Repository:       rc.Config.Env["GITHUB_REPOSITORY"],
+		Ref:              rc.Config.Env["GITHUB_REF"],
+		Sha:              rc.Config.Env["SHA_REF"],
+		RefName:          rc.Config.Env["GITHUB_REF_NAME"],
+		RefType:          rc.Config.Env["GITHUB_REF_TYPE"],
+		BaseRef:          rc.Config.Env["GITHUB_BASE_REF"],
+		HeadRef:          rc.Config.Env["GITHUB_HEAD_REF"],
+		Workspace:        rc.Config.Env["GITHUB_WORKSPACE"],
 	}
-	if rc.GithubContextBase != nil {
-		err := json.Unmarshal([]byte(*rc.GithubContextBase), ghc)
+	if rc.JobContainer != nil {
+		ghc.EventPath = rc.JobContainer.GetActPath() + "/workflow/event.json"
+		ghc.Workspace = rc.JobContainer.ToContainerPath(rc.Config.Workdir)
+	}
+
+	if rc.GHContextData != nil {
+		err := json.Unmarshal([]byte(*rc.GHContextData), ghc)
 		if err == nil {
 			return ghc
 		}
 	}
-	return applyDefaults(ghc, rc)
-}
 
-func applyDefaults(ghc *model.GithubContext, rc *RunContext) *model.GithubContext {
 	if ghc.RunID == "" {
 		ghc.RunID = "1"
 	}
@@ -680,30 +660,45 @@ func applyDefaults(ghc *model.GithubContext, rc *RunContext) *model.GithubContex
 		ghc.Actor = "nektos/act"
 	}
 
-	repoPath := rc.Config.Workdir
-	repo, err := common.FindGithubRepo(repoPath, rc.Config.GitHubInstance)
-	if err != nil {
-		log.Warningf("unable to get git repo: %v", err)
-	} else {
-		ghc.Repository = repo
-		if ghc.RepositoryOwner == "" {
-			ghc.RepositoryOwner = strings.Split(repo, "/")[0]
-		}
-	}
-
 	if rc.EventJSON != "" {
-		err = json.Unmarshal([]byte(rc.EventJSON), &ghc.Event)
+		err := json.Unmarshal([]byte(rc.EventJSON), &ghc.Event)
 		if err != nil {
-			log.Errorf("Unable to Unmarshal event '%s': %v", rc.EventJSON, err)
+			logger.Errorf("Unable to Unmarshal event '%s': %v", rc.EventJSON, err)
 		}
 	}
 
-	if ghc.EventName == "pull_request" {
-		ghc.BaseRef = asString(nestedMapLookup(ghc.Event, "pull_request", "base", "ref"))
-		ghc.HeadRef = asString(nestedMapLookup(ghc.Event, "pull_request", "head", "ref"))
+	ghc.SetBaseAndHeadRef()
+	repoPath := rc.Config.Workdir
+	ghc.SetRepositoryAndOwner(ctx, rc.Config.GitHubInstance, rc.Config.RemoteName, repoPath)
+	if ghc.Ref == "" {
+		ghc.SetRef(ctx, rc.Config.DefaultBranch, repoPath)
+	}
+	if ghc.Sha == "" {
+		ghc.SetSha(ctx, repoPath)
 	}
 
-	ghc.SetRefAndSha(rc.Config.DefaultBranch, repoPath)
+	ghc.SetRefTypeAndName()
+
+	// defaults
+	ghc.ServerURL = rc.Config.GetGitHubServerUrl()
+	ghc.APIURL = rc.Config.GetGitHubApiServerUrl()
+	ghc.GraphQLURL = rc.Config.GetGitHubGraphQlApiServerUrl()
+	// per GHES
+	if rc.Config.GitHubInstance != "github.com" {
+		ghc.ServerURL = fmt.Sprintf("https://%s", rc.Config.GitHubInstance)
+		ghc.APIURL = fmt.Sprintf("https://%s/api/v3", rc.Config.GitHubInstance)
+		ghc.GraphQLURL = fmt.Sprintf("https://%s/api/graphql", rc.Config.GitHubInstance)
+	}
+	// allow to be overridden by user
+	if rc.Config.Env["GITHUB_SERVER_URL"] != "" {
+		ghc.ServerURL = rc.Config.Env["GITHUB_SERVER_URL"]
+	}
+	if rc.Config.Env["GITHUB_API_URL"] != "" {
+		ghc.APIURL = rc.Config.Env["GITHUB_API_URL"]
+	}
+	if rc.Config.Env["GITHUB_GRAPHQL_URL"] != "" {
+		ghc.GraphQLURL = rc.Config.Env["GITHUB_GRAPHQL_URL"]
+	}
 
 	return ghc
 }
@@ -734,15 +729,6 @@ func isLocalCheckout(ghc *model.GithubContext, step *model.Step) bool {
 	return true
 }
 
-func asString(v interface{}) string {
-	if v == nil {
-		return ""
-	} else if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
-}
-
 func nestedMapLookup(m map[string]interface{}, ks ...string) (rval interface{}) {
 	var ok bool
 
@@ -760,11 +746,8 @@ func nestedMapLookup(m map[string]interface{}, ks ...string) (rval interface{}) 
 	}
 }
 
-func (rc *RunContext) withGithubEnv(env map[string]string) map[string]string {
-	github := rc.getGithubContext()
+func (rc *RunContext) withGithubEnv(ctx context.Context, github *model.GithubContext, env map[string]string) map[string]string {
 	env["CI"] = "true"
-	env["GITHUB_ENV"] = rc.GetActPath() + "/workflow/envs.txt"
-	env["GITHUB_PATH"] = rc.GetActPath() + "/workflow/paths.txt"
 	env["GITHUB_WORKFLOW"] = github.Workflow
 	env["GITHUB_RUN_ID"] = github.RunID
 	env["GITHUB_RUN_NUMBER"] = github.RunNumber
@@ -781,33 +764,19 @@ func (rc *RunContext) withGithubEnv(env map[string]string) map[string]string {
 	env["GITHUB_WORKSPACE"] = github.Workspace
 	env["GITHUB_SHA"] = github.Sha
 	env["GITHUB_REF"] = github.Ref
+	env["GITHUB_REF_NAME"] = github.RefName
+	env["GITHUB_REF_TYPE"] = github.RefType
 	env["GITHUB_TOKEN"] = github.Token
-	env["GITHUB_SERVER_URL"] = "https://github.com"
-	env["GITHUB_API_URL"] = "https://api.github.com"
-	env["GITHUB_GRAPHQL_URL"] = "https://api.github.com/graphql"
-	env["GITHUB_ACTION_REF"] = github.ActionRef
-	env["GITHUB_ACTION_REPOSITORY"] = github.ActionRepository
-	env["GITHUB_BASE_REF"] = github.BaseRef
-	env["GITHUB_HEAD_REF"] = github.HeadRef
-	env["GITHUB_JOB"] = rc.JobName
+	env["GITHUB_JOB"] = github.Job
 	env["GITHUB_REPOSITORY_OWNER"] = github.RepositoryOwner
 	env["GITHUB_RETENTION_DAYS"] = github.RetentionDays
 	env["RUNNER_PERFLOG"] = github.RunnerPerflog
 	env["RUNNER_TRACKING_ID"] = github.RunnerTrackingID
-	if rc.Config.GitHubInstance != "github.com" {
-		env["GITHUB_SERVER_URL"] = fmt.Sprintf("https://%s", rc.Config.GitHubInstance)
-		env["GITHUB_API_URL"] = fmt.Sprintf("https://%s/api/v3", rc.Config.GitHubInstance)
-		env["GITHUB_GRAPHQL_URL"] = fmt.Sprintf("https://%s/api/graphql", rc.Config.GitHubInstance)
-	}
-	if len(rc.Config.GitHubServerUrl) > 0 {
-		env["GITHUB_SERVER_URL"] = rc.Config.GitHubServerUrl
-	}
-	if len(rc.Config.GitHubServerUrl) > 0 {
-		env["GITHUB_API_URL"] = rc.Config.GitHubApiServerUrl
-	}
-	if len(rc.Config.GitHubServerUrl) > 0 {
-		env["GITHUB_GRAPHQL_URL"] = rc.Config.GitHubGraphQlApiServerUrl
-	}
+	env["GITHUB_BASE_REF"] = github.BaseRef
+	env["GITHUB_HEAD_REF"] = github.HeadRef
+	env["GITHUB_SERVER_URL"] = github.ServerURL
+	env["GITHUB_API_URL"] = github.APIURL
+	env["GITHUB_GRAPHQL_URL"] = github.GraphQLURL
 
 	if rc.Config.ArtifactServerPath != "" {
 		setActionRuntimeVars(rc, env)
@@ -816,7 +785,7 @@ func (rc *RunContext) withGithubEnv(env map[string]string) map[string]string {
 	job := rc.Run.Job()
 	if job.RunsOn() != nil {
 		for _, runnerLabel := range job.RunsOn() {
-			platformName := rc.ExprEval.Interpolate(runnerLabel)
+			platformName := rc.ExprEval.Interpolate(ctx, runnerLabel)
 			if platformName != "" {
 				if platformName == "ubuntu-latest" {
 					// hardcode current ubuntu-latest since we have no way to check that 'on the fly'
@@ -835,7 +804,7 @@ func (rc *RunContext) withGithubEnv(env map[string]string) map[string]string {
 func setActionRuntimeVars(rc *RunContext, env map[string]string) {
 	actionsRuntimeURL := os.Getenv("ACTIONS_RUNTIME_URL")
 	if actionsRuntimeURL == "" {
-		actionsRuntimeURL = fmt.Sprintf("http://%s:%s/", common.GetOutboundIP().String(), rc.Config.ArtifactServerPort)
+		actionsRuntimeURL = fmt.Sprintf("http://%s:%s/", rc.Config.ArtifactServerAddr, rc.Config.ArtifactServerPort)
 	}
 	env["ACTIONS_RUNTIME_URL"] = actionsRuntimeURL
 
@@ -846,20 +815,7 @@ func setActionRuntimeVars(rc *RunContext, env map[string]string) {
 	env["ACTIONS_RUNTIME_TOKEN"] = actionsRuntimeToken
 }
 
-func (rc *RunContext) localCheckoutPath() (string, bool) {
-	if rc.Config.ForceRemoteCheckout {
-		return "", false
-	}
-	ghContext := rc.getGithubContext()
-	for _, step := range rc.Run.Job().Steps {
-		if isLocalCheckout(ghContext, step) {
-			return step.With["path"], true
-		}
-	}
-	return "", false
-}
-
-func (rc *RunContext) handleCredentials() (username, password string, err error) {
+func (rc *RunContext) handleCredentials(ctx context.Context) (username, password string, err error) {
 	// TODO: remove below 2 lines when we can release act with breaking changes
 	username = rc.Config.Secrets["DOCKER_USERNAME"]
 	password = rc.Config.Secrets["DOCKER_PASSWORD"]
@@ -874,12 +830,12 @@ func (rc *RunContext) handleCredentials() (username, password string, err error)
 		return
 	}
 
-	ee := rc.NewExpressionEvaluator()
-	if username = ee.Interpolate(container.Credentials["username"]); username == "" {
+	ee := rc.NewExpressionEvaluator(ctx)
+	if username = ee.Interpolate(ctx, container.Credentials["username"]); username == "" {
 		err = fmt.Errorf("failed to interpolate container.credentials.username")
 		return
 	}
-	if password = ee.Interpolate(container.Credentials["password"]); password == "" {
+	if password = ee.Interpolate(ctx, container.Credentials["password"]); password == "" {
 		err = fmt.Errorf("failed to interpolate container.credentials.password")
 		return
 	}

@@ -8,36 +8,50 @@ import (
 
 // Input contains the input for the root command
 type Input struct {
-	actor                 string
-	workdir               string
-	workflowsPath         string
-	autodetectEvent       bool
-	eventPath             string
-	reuseContainers       bool
-	bindWorkdir           bool
-	secrets               []string
-	envs                  []string
-	platforms             []string
-	dryrun                bool
-	forcePull             bool
-	forceRebuild          bool
-	noOutput              bool
-	envfile               string
-	secretfile            string
-	insecureSecrets       bool
-	defaultBranch         string
-	privileged            bool
-	usernsMode            string
-	containerArchitecture string
-	containerDaemonSocket string
-	noWorkflowRecurse     bool
-	useGitIgnore          bool
-	githubInstance        string
-	containerCapAdd       []string
-	containerCapDrop      []string
-	autoRemove            bool
-	artifactServerPath    string
-	artifactServerPort    string
+	actor                              string
+	workdir                            string
+	workflowsPath                      string
+	autodetectEvent                    bool
+	eventPath                          string
+	reuseContainers                    bool
+	bindWorkdir                        bool
+	secrets                            []string
+	envs                               []string
+	inputs                             []string
+	platforms                          []string
+	dryrun                             bool
+	forcePull                          bool
+	forceRebuild                       bool
+	noOutput                           bool
+	envfile                            string
+	inputfile                          string
+	secretfile                         string
+	insecureSecrets                    bool
+	defaultBranch                      string
+	privileged                         bool
+	usernsMode                         string
+	containerArchitecture              string
+	containerDaemonSocket              string
+	containerOptions                   string
+	noWorkflowRecurse                  bool
+	useGitIgnore                       bool
+	githubInstance                     string
+	containerCapAdd                    []string
+	containerCapDrop                   []string
+	autoRemove                         bool
+	artifactServerPath                 string
+	artifactServerAddr                 string
+	artifactServerPort                 string
+	noCacheServer                      bool
+	cacheServerPath                    string
+	cacheServerAddr                    string
+	cacheServerPort                    uint16
+	jsonLogger                         bool
+	noSkipCheckout                     bool
+	remoteName                         string
+	replaceGheActionWithGithubCom      []string
+	replaceGheActionTokenWithGithubCom string
+	matrix                             []string
 }
 
 func (i *Input) resolve(path string) string {
@@ -77,4 +91,9 @@ func (i *Input) WorkflowsPath() string {
 // EventPath returns the path to events file
 func (i *Input) EventPath() string {
 	return i.resolve(i.eventPath)
+}
+
+// Inputfile returns the path to the input file
+func (i *Input) Inputfile() string {
+	return i.resolve(i.inputfile)
 }

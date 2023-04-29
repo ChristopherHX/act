@@ -2,17 +2,17 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"path/filepath"
+	"os"
 	"regexp"
-	"runtime"
-	"strings"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/nektos/act/pkg/common"
+	"github.com/nektos/act/pkg/common/git"
 	"github.com/nektos/act/pkg/container"
 	"github.com/nektos/act/pkg/model"
-	log "github.com/sirupsen/logrus"
 )
 
 // Runner provides capabilities to run GitHub actions
@@ -22,91 +22,87 @@ type Runner interface {
 
 // Config contains the config for a new runner
 type Config struct {
-	Actor                     string                       // the user that triggered the event
-	Workdir                   string                       // path to working directory
-	BindWorkdir               bool                         // bind the workdir to the job container
-	EventName                 string                       // name of event to run
-	EventPath                 string                       // path to JSON file to use for event.json in containers
-	DefaultBranch             string                       // name of the main branch for this repository
-	ReuseContainers           bool                         // reuse containers to maintain state
-	ForcePull                 bool                         // force pulling of the image, even if already present
-	ForceRebuild              bool                         // force rebuilding local docker image action
-	LogOutput                 bool                         // log the output from docker run
-	Env                       map[string]string            // env for containers
-	Secrets                   map[string]string            // list of secrets
-	InsecureSecrets           bool                         // switch hiding output when printing to terminal
-	Platforms                 map[string]string            // list of platforms
-	Privileged                bool                         // use privileged mode
-	UsernsMode                string                       // user namespace to use
-	ContainerArchitecture     string                       // Desired OS/architecture platform for running containers
-	ContainerDaemonSocket     string                       // Path to Docker daemon socket
-	UseGitIgnore              bool                         // controls if paths in .gitignore should not be copied into container, default true
-	GitHubInstance            string                       // GitHub instance to use, default "github.com"
-	GitHubServerUrl           string                       // GitHub server url to use
-	GitHubApiServerUrl        string                       // GitHub api server url to use
-	GitHubGraphQlApiServerUrl string                       // GitHub graphql server url to use
-	ContainerCapAdd           []string                     // list of kernel capabilities to add to the containers
-	ContainerCapDrop          []string                     // list of kernel capabilities to remove from the containers
-	AutoRemove                bool                         // controls if the container is automatically removed upon workflow completion
-	ArtifactServerPath        string                       // the path where the artifact server stores uploads
-	ArtifactServerPort        string                       // the port the artifact server binds to
-	CompositeRestrictions     *model.CompositeRestrictions // describes which features are available in composite actions
-	ForceRemoteCheckout       bool
+	Actor                              string                     // the user that triggered the event
+	Workdir                            string                     // path to working directory
+	BindWorkdir                        bool                       // bind the workdir to the job container
+	EventName                          string                     // name of event to run
+	EventPath                          string                     // path to JSON file to use for event.json in containers
+	DefaultBranch                      string                     // name of the main branch for this repository
+	ReuseContainers                    bool                       // reuse containers to maintain state
+	ForcePull                          bool                       // force pulling of the image, even if already present
+	ForceRebuild                       bool                       // force rebuilding local docker image action
+	LogOutput                          bool                       // log the output from docker run
+	JSONLogger                         bool                       // use json or text logger
+	Env                                map[string]string          // env for containers
+	Inputs                             map[string]string          // manually passed action inputs
+	Secrets                            map[string]string          // list of secrets
+	Token                              string                     // GitHub token
+	InsecureSecrets                    bool                       // switch hiding output when printing to terminal
+	Platforms                          map[string]string          // list of platforms
+	Privileged                         bool                       // use privileged mode
+	UsernsMode                         string                     // user namespace to use
+	ContainerArchitecture              string                     // Desired OS/architecture platform for running containers
+	ContainerDaemonSocket              string                     // Path to Docker daemon socket
+	ContainerOptions                   string                     // Options for the job container
+	UseGitIgnore                       bool                       // controls if paths in .gitignore should not be copied into container, default true
+	GitHubInstance                     string                     // GitHub instance to use, default "github.com"
+	GitHubServerUrl                    string                     // GitHub server url to use
+	GitHubApiServerUrl                 string                     // GitHub api server url to use
+	GitHubGraphQlApiServerUrl          string                     // GitHub graphql server url to use
+	ContainerCapAdd                    []string                   // list of kernel capabilities to add to the containers
+	ContainerCapDrop                   []string                   // list of kernel capabilities to remove from the containers
+	AutoRemove                         bool                       // controls if the container is automatically removed upon workflow completion
+	ArtifactServerPath                 string                     // the path where the artifact server stores uploads
+	ArtifactServerAddr                 string                     // the address the artifact server binds to
+	ArtifactServerPort                 string                     // the port the artifact server binds to
+	NoSkipCheckout                     bool                       // do not skip actions/checkout
+	RemoteName                         string                     // remote name in local git repo config
+	ReplaceGheActionWithGithubCom      []string                   // Use actions from GitHub Enterprise instance to GitHub
+	ReplaceGheActionTokenWithGithubCom string                     // Token of private action repo on GitHub.
+	Matrix                             map[string]map[string]bool // Matrix config to run
+	DownloadAction                     func(git.NewGitCloneExecutorInput) common.Executor
 }
 
-// Resolves the equivalent host path inside the container
-// This is required for windows and WSL 2 to translate things like C:\Users\Myproject to /mnt/users/Myproject
-// For use in docker volumes and binds
-func (rc *RunContext) containerPath(path string) string {
-	if rc.Local {
-		if he, ok := rc.JobContainer.(*container.HostExecutor); ok {
-			if bp, err := filepath.Rel(rc.Config.Workdir, path); err != nil {
-				return filepath.Join(he.Path, bp)
-			} else if filepath.Clean(rc.Config.Workdir) == filepath.Clean(path) {
-				return he.Path
-			}
-		}
-		return path
+func (runnerConfig *Config) GetGitHubServerUrl() string {
+	if len(runnerConfig.GitHubServerUrl) > 0 {
+		return runnerConfig.GitHubServerUrl
 	}
-	if runtime.GOOS == "windows" && strings.Contains(path, "/") {
-		log.Error("You cannot specify linux style local paths (/mnt/etc) on Windows as it does not understand them.")
-		return ""
+	return fmt.Sprintf("https://%s", runnerConfig.GitHubInstance)
+}
+func (runnerConfig *Config) GetGitHubApiServerUrl() string {
+	if len(runnerConfig.GitHubApiServerUrl) > 0 {
+		return runnerConfig.GitHubApiServerUrl
 	}
-
-	abspath, err := filepath.Abs(path)
-	if err != nil {
-		log.Error(err)
-		return ""
+	if runnerConfig.GitHubInstance == "github.com" {
+		return "https://api.github.com"
 	}
-
-	// Test if the path is a windows path
-	windowsPathRegex := regexp.MustCompile(`^([a-zA-Z]):\\(.+)$`)
-	windowsPathComponents := windowsPathRegex.FindStringSubmatch(abspath)
-
-	// Return as-is if no match
-	if windowsPathComponents == nil {
-		return abspath
+	return fmt.Sprintf("https://%s/api/v3", runnerConfig.GitHubInstance)
+}
+func (runnerConfig *Config) GetGitHubGraphQlApiServerUrl() string {
+	if len(runnerConfig.GitHubGraphQlApiServerUrl) > 0 {
+		return runnerConfig.GitHubGraphQlApiServerUrl
 	}
-
-	// Convert to WSL2-compatible path if it is a windows path
-	// NOTE: Cannot use filepath because it will use the wrong path separators assuming we want the path to be windows
-	// based if running on Windows, and because we are feeding this to Docker, GoLang auto-path-translate doesn't work.
-	driveLetter := strings.ToLower(windowsPathComponents[1])
-	translatedPath := strings.ReplaceAll(windowsPathComponents[2], `\`, `/`)
-	// Should make something like /mnt/c/Users/person/My Folder/MyActProject
-	result := strings.Join([]string{"/mnt", driveLetter, translatedPath}, `/`)
-	return result
+	if runnerConfig.GitHubInstance == "github.com" {
+		return "https://api.github.com/graphql"
+	}
+	return fmt.Sprintf("https://%s/api/graphql", runnerConfig.GitHubInstance)
+}
+func (runnerConfig *Config) GetGitHubInstance() string {
+	if len(runnerConfig.GitHubServerUrl) > 0 {
+		regex := regexp.MustCompile("^https?://(.*)$")
+		return regex.ReplaceAllString(runnerConfig.GitHubServerUrl, "$1")
+	}
+	return runnerConfig.GitHubInstance
 }
 
-// Resolves the equivalent host path inside the container
-// This is required for windows and WSL 2 to translate things like C:\Users\Myproject to /mnt/users/Myproject
-func (rc *RunContext) ContainerWorkdir() string {
-	return rc.containerPath(rc.Config.Workdir)
+type caller struct {
+	runContext *RunContext
 }
 
 type runnerImpl struct {
 	config    *Config
 	eventJSON string
+	caller    *caller // the job calling this runner (caller of a reusable workflow)
 }
 
 // New Creates a new Runner
@@ -115,36 +111,59 @@ func New(runnerConfig *Config) (Runner, error) {
 		config: runnerConfig,
 	}
 
+	return runner.configure()
+}
+
+func (runner *runnerImpl) configure() (Runner, error) {
 	runner.eventJSON = "{}"
-	if runnerConfig.EventPath != "" {
+	if runner.config.EventPath != "" {
 		log.Debugf("Reading event.json from %s", runner.config.EventPath)
-		eventJSONBytes, err := ioutil.ReadFile(runner.config.EventPath)
+		eventJSONBytes, err := os.ReadFile(runner.config.EventPath)
 		if err != nil {
 			return nil, err
 		}
 		runner.eventJSON = string(eventJSONBytes)
+	} else if len(runner.config.Inputs) != 0 {
+		eventMap := map[string]map[string]string{
+			"inputs": runner.config.Inputs,
+		}
+		eventJSON, err := json.Marshal(eventMap)
+		if err != nil {
+			return nil, err
+		}
+		runner.eventJSON = string(eventJSON)
 	}
 	return runner, nil
 }
 
+// NewPlanExecutor ...
 func (runner *runnerImpl) NewPlanExecutor(plan *model.Plan) common.Executor {
 	maxJobNameLen := 0
+
 	stagePipeline := make([]common.Executor, 0)
 	for i := range plan.Stages {
-		s := i
 		stage := plan.Stages[i]
 		stagePipeline = append(stagePipeline, func(ctx context.Context) error {
 			pipeline := make([]common.Executor, 0)
-			stageExecutor := make([]common.Executor, 0)
-			for r, run := range stage.Runs {
+			for _, run := range stage.Runs {
+				stageExecutor := make([]common.Executor, 0)
 				job := run.Job()
+
 				if job.Strategy != nil {
-					strategyRc := runner.newRunContext(run, nil)
-					if err := strategyRc.NewExpressionEvaluator().EvaluateYamlNode(&job.Strategy.RawMatrix); err != nil {
+					strategyRc := runner.newRunContext(ctx, run, nil)
+					if err := strategyRc.NewExpressionEvaluator(ctx).EvaluateYamlNode(ctx, &job.Strategy.RawMatrix); err != nil {
 						log.Errorf("Error while evaluating matrix: %v", err)
 					}
 				}
-				matrixes := job.GetMatrixes()
+
+				var matrixes []map[string]interface{}
+				if m, err := job.GetMatrixes(); err != nil {
+					log.Errorf("Error while get job's matrix: %v", err)
+				} else {
+					matrixes = selectMatrixes(m, runner.config.Matrix)
+				}
+				log.Debugf("Final matrix after applying user inclusions '%v'", matrixes)
+
 				maxParallel := 4
 				if job.Strategy != nil {
 					maxParallel = job.Strategy.MaxParallel
@@ -154,9 +173,9 @@ func (runner *runnerImpl) NewPlanExecutor(plan *model.Plan) common.Executor {
 					maxParallel = len(matrixes)
 				}
 
-				b := 0
 				for i, matrix := range matrixes {
-					rc := runner.newRunContext(run, matrix)
+					matrix := matrix
+					rc := runner.newRunContext(ctx, run, matrix)
 					rc.JobName = rc.Name
 					if len(matrixes) > 1 {
 						rc.Name = fmt.Sprintf("%s-%d", rc.Name, i+1)
@@ -166,30 +185,20 @@ func (runner *runnerImpl) NewPlanExecutor(plan *model.Plan) common.Executor {
 					}
 					stageExecutor = append(stageExecutor, func(ctx context.Context) error {
 						jobName := fmt.Sprintf("%-*s", maxJobNameLen, rc.String())
-						return rc.Executor().Finally(func(ctx context.Context) error {
-							isLastRunningContainer := func(currentStage int, currentRun int) bool {
-								return currentStage == len(plan.Stages)-1 && currentRun == len(stage.Runs)-1
-							}
-
-							if runner.config.AutoRemove && isLastRunningContainer(s, r) {
-								log.Infof("Cleaning up container for job %s", rc.JobName)
-								if err := rc.stopJobContainer()(ctx); err != nil {
-									log.Errorf("Error while cleaning container: %v", err)
-								}
-							}
-
-							return nil
-						})(common.WithJobErrorContainer(WithJobLogger(ctx, jobName, rc.Config.Secrets, rc.Config.InsecureSecrets)))
+						return rc.Executor()(common.WithJobErrorContainer(WithJobLogger(ctx, rc.Run.JobID, jobName, rc.Config, &rc.Masks, matrix)))
 					})
-					b++
-					if b == maxParallel {
-						pipeline = append(pipeline, common.NewParallelExecutor(stageExecutor...))
-						stageExecutor = make([]common.Executor, 0)
-						b = 0
-					}
 				}
+				pipeline = append(pipeline, common.NewParallelExecutor(maxParallel, stageExecutor...))
 			}
-			return common.NewPipelineExecutor(pipeline...)(ctx)
+			var ncpu int
+			info, err := container.GetHostInfo(ctx)
+			if err != nil {
+				log.Errorf("failed to obtain container engine info: %s", err)
+				ncpu = 1 // sane default?
+			} else {
+				ncpu = info.NCPU
+			}
+			return common.NewParallelExecutor(ncpu, pipeline...)(ctx)
 		})
 	}
 
@@ -209,15 +218,36 @@ func handleFailure(plan *model.Plan) common.Executor {
 	}
 }
 
-func (runner *runnerImpl) newRunContext(run *model.Run, matrix map[string]interface{}) *RunContext {
+func selectMatrixes(originalMatrixes []map[string]interface{}, targetMatrixValues map[string]map[string]bool) []map[string]interface{} {
+	matrixes := make([]map[string]interface{}, 0)
+	for _, original := range originalMatrixes {
+		flag := true
+		for key, val := range original {
+			if allowedVals, ok := targetMatrixValues[key]; ok {
+				valToString := fmt.Sprintf("%v", val)
+				if _, ok := allowedVals[valToString]; !ok {
+					flag = false
+				}
+			}
+		}
+		if flag {
+			matrixes = append(matrixes, original)
+		}
+	}
+	return matrixes
+}
+
+func (runner *runnerImpl) newRunContext(ctx context.Context, run *model.Run, matrix map[string]interface{}) *RunContext {
 	rc := &RunContext{
 		Config:      runner.config,
 		Run:         run,
 		EventJSON:   runner.eventJSON,
 		StepResults: make(map[string]*model.StepResult),
 		Matrix:      matrix,
+		caller:      runner.caller,
 	}
-	rc.ExprEval = rc.NewExpressionEvaluator()
-	rc.Name = rc.ExprEval.Interpolate(run.String())
+	rc.ExprEval = rc.NewExpressionEvaluator(ctx)
+	rc.Name = rc.ExprEval.Interpolate(ctx, run.String())
+
 	return rc
 }

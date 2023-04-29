@@ -1,5 +1,3 @@
-// +build linux darwin windows openbsd
-
 package container
 
 import (
@@ -31,7 +29,7 @@ func TestCleanImage(t *testing.T) {
 	}
 
 	for _, table := range tables {
-		imageOut := cleanImage(table.imageIn)
+		imageOut := cleanImage(context.Background(), table.imageIn)
 		assert.Equal(t, table.imageOut, imageOut)
 	}
 }

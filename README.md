@@ -11,7 +11,7 @@ Run your [GitHub Actions](https://developer.github.com/actions/) locally! Why wo
 
 # How Does It Work?
 
-When you run `act` it reads in your GitHub Actions from `.github/workflows/` and determines the set of actions that need to be run. It uses the Docker API to either pull or build the necessary images, as defined in your workflow files and finally determines the execution path based on the dependencies that were defined. Once it has the execution path, it then uses the Docker API to run containers for each action based on the images prepared earlier. The [environment variables](https://help.github.com/en/actions/configuring-and-managing-workflows/using-environment-variables#default-environment-variables) and [filesystem](https://help.github.com/en/actions/reference/virtual-environments-for-github-hosted-runners#filesystems-on-github-hosted-runners) are all configured to match what GitHub provides.
+When you run `act` it reads in your GitHub Actions from `.github/workflows/` and determines the set of actions that need to be run. It uses the Docker API to either pull or build the necessary images, as defined in your workflow files and finally determines the execution path based on the dependencies that were defined. Once it has the execution path, it then uses the Docker API to run containers for each action based on the images prepared earlier. The [environment variables](https://help.github.com/en/actions/configuring-and-managing-workflows/using-environment-variables#default-environment-variables) and [filesystem](https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#file-systems) are all configured to match what GitHub provides.
 
 Let's see it in action with a [sample repo](https://github.com/cplee/github-actions-demo)!
 
@@ -41,13 +41,15 @@ If you are using Linux, you will need to [install Docker Engine](https://docs.do
 brew install act
 ```
 
-or if you want to install version based on latest commit, you can run below (it requires compiler to be installed installed but Homebrew will suggest you how to install it, if you don't have it):
+or if you want to install version based on latest commit, you can run below (it requires compiler to be installed but Homebrew will suggest you how to install it, if you don't have it):
 
 ```shell
 brew install act --HEAD
 ```
 
 ### [MacPorts](https://www.macports.org) (macOS)
+
+[![MacPorts package](https://repology.org/badge/version-for-repo/macports/act-run-github-actions.svg)](https://repology.org/project/act-run-github-actions/versions)
 
 ```shell
 sudo port install act
@@ -69,12 +71,20 @@ choco install act-cli
 scoop install act
 ```
 
+### [Winget](https://learn.microsoft.com/en-us/windows/package-manager/) (Windows)
+
+[![Winget package](https://repology.org/badge/version-for-repo/winget/act-run-github-actions.svg)](https://repology.org/project/act-run-github-actions/versions)
+
+```shell
+winget install nektos.act
+```
+
 ### [AUR](https://aur.archlinux.org/packages/act/) (Linux)
 
 [![aur-shield](https://img.shields.io/aur/version/act)](https://aur.archlinux.org/packages/act/)
 
 ```shell
-yay -S act
+yay -Syu act
 ```
 
 ### [COPR](https://copr.fedorainfracloud.org/coprs/rubemlrm/act-cli/) (Linux)
@@ -100,24 +110,18 @@ or through `nix-shell`:
 nix-shell -p act
 ```
 
-### [Go](https://golang.org) (Linux/Windows/macOS/any other platform supported by Go)
-
-If you have Go 1.16+, you can install latest released version of `act` directly from source by running:
+Using the latest [Nix command](https://nixos.wiki/wiki/Nix_command), you can run directly :
 
 ```sh
-go install github.com/nektos/act@latest
+nix run nixpkgs#act
 ```
 
-or if you want to install latest unreleased version:
+## Installation as GitHub CLI extension
+
+Act can be installed as a [GitHub CLI](https://cli.github.com/) extension:
 
 ```sh
-go install github.com/nektos/act@master
-```
-
-If you want a smaller binary size, run above commands with `-ldflags="-s -w"`
-
-```sh
-go install -ldflags="-s -w" github.com/nektos/act@...
+gh extension install https://github.com/nektos/gh-act
 ```
 
 ## Other install options
@@ -127,7 +131,7 @@ go install -ldflags="-s -w" github.com/nektos/act@...
 Run this command in your terminal:
 
 ```shell
-curl https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash
+curl -s https://raw.githubusercontent.com/nektos/act/master/install.sh | sudo bash
 ```
 
 ### Manual download
@@ -140,12 +144,16 @@ Download the [latest release](https://github.com/nektos/act/releases/latest) and
 # Command structure:
 act [<event>] [options]
 If no event name passed, will default to "on: push"
+If actions handles only one event it will be used as default instead of "on: push"
 
-# List the actions for the default event:
+# List all actions for all events:
 act -l
 
 # List the actions for a specific event:
 act workflow_dispatch -l
+
+# List the actions for a specific job:
+act -j test -l
 
 # Run the default (`push`) event:
 act
@@ -155,6 +163,12 @@ act pull_request
 
 # Run a specific job:
 act -j test
+
+# Collect artifacts to the /tmp/artifacts folder:
+act --artifact-server-path /tmp/artifacts
+
+# Run a job in a specific workflow (useful if you have duplicate job names)
+act -j lint -W .github/workflows/checks.yml
 
 # Run in dry-run mode:
 act -n
@@ -168,60 +182,23 @@ act -v
 When running `act` for the first time, it will ask you to choose image to be used as default.
 It will save that information to `~/.actrc`, please refer to [Configuration](#configuration) for more information about `.actrc` and to [Runners](#runners) for information about used/available Docker images.
 
-# Flags
-
-```none
-  -a, --actor string                     user that triggered the event (default "nektos/act")
-      --artifact-server-path string      Defines the path where the artifact server stores uploads and retrieves downloads from. If not specified the artifact server will not start.
-      --artifact-server-port string      Defines the port where the artifact server listens (will only bind to localhost). (default "34567")
-  -b, --bind                             bind working directory to container, rather than copy
-      --container-architecture string    Architecture which should be used to run containers, e.g.: linux/amd64. If not specified, will use host default architecture. Requires Docker server API Version 1.41+. Ignored on earlier Docker server platforms.
-      --container-cap-add stringArray    kernel capabilities to add to the workflow containers (e.g. --container-cap-add SYS_PTRACE)
-      --container-cap-drop stringArray   kernel capabilities to remove from the workflow containers (e.g. --container-cap-drop SYS_PTRACE)
-      --container-daemon-socket string   Path to Docker daemon socket which will be mounted to containers (default "/var/run/docker.sock")
-      --defaultbranch string             the name of the main branch
-      --detect-event                     Use first event type from workflow as event that triggered the workflow
-  -C, --directory string                 working directory (default ".")
-  -n, --dryrun                           dryrun mode
-      --env stringArray                  env to make available to actions with optional value (e.g. --env myenv=foo or --env myenv)
-      --env-file string                  environment file to read and use as env in the containers (default ".env")
-  -e, --eventpath string                 path to event JSON file
-      --github-instance string           GitHub instance to use. Don't use this if you are not using GitHub Enterprise Server. (default "github.com")
-  -g, --graph                            draw workflows
-  -h, --help                             help for act
-      --insecure-secrets                 NOT RECOMMENDED! Doesn't hide secrets while printing logs.
-  -j, --job string                       run job
-  -l, --list                             list workflows
-      --no-recurse                       Flag to disable running workflows from subdirectories of specified path in '--workflows'/'-W' flag
-  -P, --platform stringArray             custom image to use per platform (e.g. -P ubuntu-18.04=nektos/act-environments-ubuntu:18.04)
-      --privileged                       use privileged mode
-  -p, --pull                             pull docker image(s) even if already present
-  -q, --quiet                            disable logging of output from steps
-      --rebuild                          rebuild local action docker image(s) even if already present
-  -r, --reuse                            don't remove container(s) on successfully completed workflow(s) to maintain state between runs
-      --rm                               automatically remove container(s)/volume(s) after a workflow(s) failure
-  -s, --secret stringArray               secret to make available to actions with optional value (e.g. -s mysecret=foo or -s mysecret)
-      --secret-file string               file with list of secrets to read from (e.g. --secret-file .secrets) (default ".secrets")
-      --use-gitignore                    Controls whether paths specified in .gitignore should be copied into container (default true)
-      --userns string                    user namespace to use
-  -v, --verbose                          verbose output
-  -w, --watch                            watch the contents of the local repo and run when files change
-  -W, --workflows string                 path to workflow file(s) (default "./.github/workflows/")
-```
-
 ## `GITHUB_TOKEN`
 
-Github [automatically provides](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#about-the-github_token-secret) a `GITHUB_TOKEN` secret when running workflows inside Github.
+GitHub [automatically provides](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#about-the-github_token-secret) a `GITHUB_TOKEN` secret when running workflows inside GitHub.
 
 If your workflow depends on this token, you need to create a [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token) and pass it to `act` as a secret:
 
 ```bash
-act -s GITHUB_TOKEN=[insert token or leave blank for secure input]
+act -s GITHUB_TOKEN=[insert token or leave blank and omit equals for secure input]
 ```
 
 **WARNING**: `GITHUB_TOKEN` will be logged in shell history if not inserted through secure input or (depending on your shell config) the command is prefixed with a whitespace.
 
 # Known Issues
+
+## Services
+
+Services are not currently supported but are being worked on. See: [#173](https://github.com/nektos/act/issues/173)
 
 ## `MODULE_NOT_FOUND`
 
@@ -258,11 +235,12 @@ export DOCKER_HOST=$(docker context inspect --format '{{.Endpoints.docker.Host}}
 
 GitHub Actions offers managed [virtual environments](https://help.github.com/en/actions/reference/virtual-environments-for-github-hosted-runners) for running workflows. In order for `act` to run your workflows locally, it must run a container for the runner defined in your workflow file. Here are the images that `act` uses for each runner type and size:
 
-| GitHub Runner   | Micro Docker Image             | Medium Docker Image                                       | Large Docker Image                                         |
-| --------------- | ------------------------------ | --------------------------------------------------------- | ---------------------------------------------------------- |
-| `ubuntu-latest` | [`node:16-buster-slim`][micro] | [`ghcr.io/catthehacker/ubuntu:act-latest`][docker_images] | [`ghcr.io/catthehacker/ubuntu:full-latest`][docker_images] |
-| `ubuntu-20.04`  | [`node:16-buster-slim`][micro] | [`ghcr.io/catthehacker/ubuntu:act-20.04`][docker_images]  | [`ghcr.io/catthehacker/ubuntu:full-20.04`][docker_images]  |
-| `ubuntu-18.04`  | [`node:16-buster-slim`][micro] | [`ghcr.io/catthehacker/ubuntu:act-18.04`][docker_images]  | [`ghcr.io/catthehacker/ubuntu:full-18.04`][docker_images]  |
+| GitHub Runner   | Micro Docker Image               | Medium Docker Image                               | Large Docker Image                                 |
+| --------------- | -------------------------------- | ------------------------------------------------- | -------------------------------------------------- |
+| `ubuntu-latest` | [`node:16-buster-slim`][micro]   | [`catthehacker/ubuntu:act-latest`][docker_images] | [`catthehacker/ubuntu:full-latest`][docker_images] |
+| `ubuntu-22.04`  | [`node:16-bullseye-slim`][micro] | [`catthehacker/ubuntu:act-22.04`][docker_images]  | `unavailable`                                      |
+| `ubuntu-20.04`  | [`node:16-buster-slim`][micro]   | [`catthehacker/ubuntu:act-20.04`][docker_images]  | [`catthehacker/ubuntu:full-20.04`][docker_images]  |
+| `ubuntu-18.04`  | [`node:16-buster-slim`][micro]   | [`catthehacker/ubuntu:act-18.04`][docker_images]  | [`catthehacker/ubuntu:full-18.04`][docker_images]  |
 
 [micro]: https://hub.docker.com/_/buildpack-deps
 [docker_images]: https://github.com/catthehacker/docker_images
@@ -286,7 +264,7 @@ If you need an environment that works just like the corresponding GitHub runner 
 
 :warning: :elephant: `*** WARNING - this image is >18GB 😱***`
 
-- [`ghcr.io/catthehacker/ubuntu:full-*`](https://github.com/catthehacker/docker_images/pkgs/container/ubuntu) - built from Packer template provided by GitHub, see [catthehacker/virtual-environments-fork](https://github.com/catthehacker/virtual-environments-fork) or [catthehacker/docker_images](https://github.com/catthehacker/docker_images) for more information
+- [`catthehacker/ubuntu:full-*`](https://github.com/catthehacker/docker_images/pkgs/container/ubuntu) - built from Packer template provided by GitHub, see [catthehacker/virtual-environments-fork](https://github.com/catthehacker/virtual-environments-fork) or [catthehacker/docker_images](https://github.com/catthehacker/docker_images) for more information
 
 ## Use an alternative runner image
 
@@ -340,10 +318,41 @@ MY_ENV_VAR=MY_ENV_VAR_VALUE
 MY_2ND_ENV_VAR="my 2nd env var value"
 ```
 
+# Skipping jobs
+
+You cannot use the `env` context in job level if conditions, but you can add a custom event property to the `github` context. You can use this method also on step level if conditions.
+
+```yml
+on: push
+jobs:
+  deploy:
+    if: ${{ !github.event.act }} # skip during local actions testing
+    runs-on: ubuntu-latest
+    steps:
+    - run: exit 0
+```
+
+And use this `event.json` file with act otherwise the Job will run:
+
+```json
+{
+    "act": true
+}
+```
+
+Run act like
+
+```sh
+act -e event.json
+```
+
+_Hint: you can add / append `-e event.json` as a line into `./.actrc`_
+
 # Skipping steps
 
 Act adds a special environment variable `ACT` that can be used to skip a step that you
 don't want to run locally. E.g. a step that posts a Slack message or bumps a version number.
+**You cannot use this method in job level if conditions, see [Skipping jobs](#skipping-jobs)**
 
 ```yml
 - name: Some step
@@ -370,10 +379,61 @@ Every [GitHub event](https://developer.github.com/v3/activity/events/types) is a
 ```
 
 ```sh
-act -e pull-request.json
+act pull_request -e pull-request.json
 ```
 
 Act will properly provide `github.head_ref` and `github.base_ref` to the action as expected.
+
+# Pass Inputs to Manually Triggered Workflows
+
+Example workflow file
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      NAME:
+        description: "A random input name for the workflow"
+        type: string
+      SOME_VALUE:
+        description: "Some other input to pass"
+        type: string
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Test with inputs
+        run: |
+          echo "Hello ${{ github.event.inputs.NAME }} and ${{ github.event.inputs.SOME_VALUE }}!"
+```
+
+## via input or input-file flag
+
+- `act --input NAME=somevalue` - use `somevalue` as the value for `NAME` input.
+- `act --input-file my.input` - load input values from `my.input` file.
+  - input file format is the same as `.env` format
+
+## via JSON
+
+Example JSON payload file conveniently named `payload.json`
+
+```json
+{
+  "inputs": {
+    "NAME": "Manual Workflow",
+    "SOME_VALUE": "ABC"
+  }
+}
+```
+
+Command for triggering the workflow
+
+```sh
+act workflow_dispatch -e payload.json
+```
 
 # GitHub Enterprise
 
@@ -394,7 +454,7 @@ Want to contribute to act? Awesome! Check out the [contributing guidelines](CONT
 
 ## Manually building from source
 
-- Install Go tools 1.16+ - (<https://golang.org/doc/install>)
+- Install Go tools 1.18+ - (<https://golang.org/doc/install>)
 - Clone this repo `git clone git@github.com:nektos/act.git`
 - Run unit tests with `make test`
 - Build and install: `make install`

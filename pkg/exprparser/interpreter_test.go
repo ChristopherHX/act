@@ -29,7 +29,7 @@ func TestLiterals(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -69,6 +69,11 @@ func TestOperators(t *testing.T) {
 		{`true || false`, true, "or", ""},
 		{`fromJSON('{}') && true`, true, "and-boolean-object", ""},
 		{`fromJSON('{}') || false`, make(map[string]interface{}), "or-boolean-object", ""},
+		{"github.event.commits[0].author.username != github.event.commits[1].author.username", true, "property-comparison1", ""},
+		{"github.event.commits[0].author.username1 != github.event.commits[1].author.username", true, "property-comparison2", ""},
+		{"github.event.commits[0].author.username != github.event.commits[1].author.username1", true, "property-comparison3", ""},
+		{"github.event.commits[0].author.username1 != github.event.commits[1].author.username2", true, "property-comparison4", ""},
+		{"secrets != env", nil, "property-comparison5", "Compare not implemented for types: left: map, right: map"},
 	}
 
 	env := &EvaluationEnvironment{
@@ -93,7 +98,7 @@ func TestOperators(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			if tt.error != "" {
 				assert.NotNil(t, err)
 				assert.Equal(t, tt.error, err.Error())
@@ -129,6 +134,10 @@ func TestOperatorsCompare(t *testing.T) {
 		{`0 == '' }}`, true, "string-0-coercion-alt"},
 		{`3 == '3' }}`, true, "string-3-coercion-alt"},
 		{`'TEST' == 'test' }}`, true, "string-casing"},
+		{"true > false }}", true, "bool-greater-than"},
+		{"true >= false }}", true, "bool-greater-than-eq"},
+		{"true >= true }}", true, "bool-greater-than-1"},
+		{"true != false }}", true, "bool-not-equal"},
 		{`fromJSON('{}') < 2 }}`, false, "object-with-less"},
 		{`fromJSON('{}') < fromJSON('[]') }}`, false, "object/arr-with-lt"},
 		{`fromJSON('{}') > fromJSON('[]') }}`, false, "object/arr-with-gt"},
@@ -142,7 +151,7 @@ func TestOperatorsCompare(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)
@@ -505,7 +514,7 @@ func TestOperatorsBooleanEvaluation(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			if expected, ok := tt.expected.(float64); ok && math.IsNaN(expected) {
@@ -551,6 +560,7 @@ func TestContexts(t *testing.T) {
 		{"strategy.fail-fast", true, "strategy-context"},
 		{"matrix.os", "Linux", "matrix-context"},
 		{"needs.job-id.outputs.output-name", "value", "needs-context"},
+		{"needs.job-id.result", "success", "needs-context"},
 		{"inputs.name", "value", "inputs-context"},
 	}
 
@@ -589,11 +599,12 @@ func TestContexts(t *testing.T) {
 		Matrix: map[string]interface{}{
 			"os": "Linux",
 		},
-		Needs: map[string]map[string]map[string]string{
+		Needs: map[string]Needs{
 			"job-id": {
-				"outputs": {
+				Outputs: map[string]string{
 					"output-name": "value",
 				},
+				Result: "success",
 			},
 		},
 		Inputs: map[string]interface{}{
@@ -603,7 +614,7 @@ func TestContexts(t *testing.T) {
 
 	for _, tt := range table {
 		t.Run(tt.name, func(t *testing.T) {
-			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, false)
+			output, err := NewInterpeter(env, Config{}).Evaluate(tt.input, DefaultStatusCheckNone)
 			assert.Nil(t, err)
 
 			assert.Equal(t, tt.expected, output)

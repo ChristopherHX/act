@@ -8,16 +8,16 @@ jobs:
     name: Stale
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@v4
+      - uses: actions/stale@v8
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           stale-issue-message: 'Issue is stale and will be closed in 14 days unless there is new activity'
           stale-pr-message: 'PR is stale and will be closed in 14 days unless there is new activity'
           stale-issue-label: 'stale'
-          exempt-issue-labels: 'stale-exempt'
+          exempt-issue-labels: 'stale-exempt,kind/feature-request'
           stale-pr-label: 'stale'
           exempt-pr-labels: 'stale-exempt'
           remove-stale-when-updated: 'True'
           operations-per-run: 500
-          days-before-stale: 30
+          days-before-stale: 180
           days-before-close: 14

@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
+
+	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 
 	"github.com/nektos/act/pkg/model"
 	"github.com/rhysd/actionlint"
@@ -178,25 +181,40 @@ func (impl *interperterImpl) fromJSON(value reflect.Value) (interface{}, error) 
 }
 
 func (impl *interperterImpl) hashFiles(paths ...reflect.Value) (string, error) {
-	var filepaths []string
+	var ps []gitignore.Pattern
 
+	const cwdPrefix = "." + string(filepath.Separator)
+	const excludeCwdPrefix = "!" + cwdPrefix
 	for _, path := range paths {
 		if path.Kind() == reflect.String {
-			filepaths = append(filepaths, path.String())
+			cleanPath := path.String()
+			if strings.HasPrefix(cleanPath, cwdPrefix) {
+				cleanPath = cleanPath[len(cwdPrefix):]
+			} else if strings.HasPrefix(cleanPath, excludeCwdPrefix) {
+				cleanPath = "!" + cleanPath[len(excludeCwdPrefix):]
+			}
+			ps = append(ps, gitignore.ParsePattern(cleanPath, nil))
 		} else {
 			return "", fmt.Errorf("Non-string path passed to hashFiles")
 		}
 	}
 
+	matcher := gitignore.NewMatcher(ps)
+
 	var files []string
-
-	for i := range filepaths {
-		newFiles, err := filepath.Glob(filepath.Join(impl.config.WorkingDir, filepaths[i]))
+	if err := filepath.Walk(impl.config.WorkingDir, func(path string, fi fs.FileInfo, err error) error {
 		if err != nil {
-			return "", fmt.Errorf("Unable to glob.Glob: %v", err)
+			return err
 		}
-
-		files = append(files, newFiles...)
+		sansPrefix := strings.TrimPrefix(path, impl.config.WorkingDir+string(filepath.Separator))
+		parts := strings.Split(sansPrefix, string(filepath.Separator))
+		if fi.IsDir() || !matcher.Match(parts, fi.IsDir()) {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	}); err != nil {
+		return "", fmt.Errorf("Unable to filepath.Walk: %v", err)
 	}
 
 	if len(files) == 0 {

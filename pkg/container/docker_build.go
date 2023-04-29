@@ -1,4 +1,4 @@
-// +build linux darwin windows openbsd
+//go:build !(WITHOUT_DOCKER || !(linux || darwin || windows))
 
 package container
 
@@ -10,22 +10,13 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/pkg/archive"
-	"github.com/docker/docker/pkg/fileutils"
 
 	// github.com/docker/docker/builder/dockerignore is deprecated
 	"github.com/moby/buildkit/frontend/dockerfile/dockerignore"
-	log "github.com/sirupsen/logrus"
+	"github.com/moby/patternmatcher"
 
 	"github.com/nektos/act/pkg/common"
 )
-
-// NewDockerBuildExecutorInput the input for the NewDockerBuildExecutor function
-type NewDockerBuildExecutorInput struct {
-	ContextDir string
-	Container  Container
-	ImageTag   string
-	Platform   string
-}
 
 // NewDockerBuildExecutor function to create a run executor for the container
 func NewDockerBuildExecutor(input NewDockerBuildExecutorInput) common.Executor {
@@ -50,15 +41,17 @@ func NewDockerBuildExecutor(input NewDockerBuildExecutorInput) common.Executor {
 
 		tags := []string{input.ImageTag}
 		options := types.ImageBuildOptions{
-			Tags:     tags,
-			Remove:   true,
-			Platform: input.Platform,
+			Tags:        tags,
+			Remove:      true,
+			Platform:    input.Platform,
+			AuthConfigs: LoadDockerAuthConfigs(ctx),
+			Dockerfile:  input.Dockerfile,
 		}
 		var buildContext io.ReadCloser
 		if input.Container != nil {
 			buildContext, err = input.Container.GetContainerArchive(ctx, input.ContextDir+"/.")
 		} else {
-			buildContext, err = createBuildContext(input.ContextDir, "Dockerfile")
+			buildContext, err = createBuildContext(ctx, input.ContextDir, input.Dockerfile)
 		}
 		if err != nil {
 			return err
@@ -76,8 +69,8 @@ func NewDockerBuildExecutor(input NewDockerBuildExecutorInput) common.Executor {
 		return nil
 	}
 }
-func createBuildContext(contextDir string, relDockerfile string) (io.ReadCloser, error) {
-	log.Debugf("Creating archive for build context dir '%s' with relative dockerfile '%s'", contextDir, relDockerfile)
+func createBuildContext(ctx context.Context, contextDir string, relDockerfile string) (io.ReadCloser, error) {
+	common.Logger(ctx).Debugf("Creating archive for build context dir '%s' with relative dockerfile '%s'", contextDir, relDockerfile)
 
 	// And canonicalize dockerfile name to a platform-independent one
 	relDockerfile = archive.CanonicalTarNameForPath(relDockerfile)
@@ -104,8 +97,8 @@ func createBuildContext(contextDir string, relDockerfile string) (io.ReadCloser,
 	// parses the Dockerfile. Ignore errors here, as they will have been
 	// caught by validateContextDirectory above.
 	var includes = []string{"."}
-	keepThem1, _ := fileutils.Matches(".dockerignore", excludes)
-	keepThem2, _ := fileutils.Matches(relDockerfile, excludes)
+	keepThem1, _ := patternmatcher.Matches(".dockerignore", excludes)
+	keepThem2, _ := patternmatcher.Matches(relDockerfile, excludes)
 	if keepThem1 || keepThem2 {
 		includes = append(includes, ".dockerignore", relDockerfile)
 	}

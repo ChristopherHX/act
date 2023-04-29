@@ -1,4 +1,4 @@
-// +build linux darwin windows openbsd
+//go:build !(WITHOUT_DOCKER || !(linux || darwin || windows))
 
 package container
 

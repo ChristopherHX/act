@@ -1,20 +1,22 @@
-// +build linux darwin windows openbsd
+//go:build !(WITHOUT_DOCKER || !(linux || darwin || windows))
 
 package container
 
 import (
+	"context"
 	"strings"
 
 	"github.com/docker/cli/cli/config"
 	"github.com/docker/cli/cli/config/credentials"
 	"github.com/docker/docker/api/types"
-	log "github.com/sirupsen/logrus"
+	"github.com/nektos/act/pkg/common"
 )
 
-func LoadDockerAuthConfig(image string) (types.AuthConfig, error) {
+func LoadDockerAuthConfig(ctx context.Context, image string) (types.AuthConfig, error) {
+	logger := common.Logger(ctx)
 	config, err := config.Load(config.Dir())
 	if err != nil {
-		log.Warnf("Could not load docker config: %v", err)
+		logger.Warnf("Could not load docker config: %v", err)
 		return types.AuthConfig{}, err
 	}
 
@@ -30,9 +32,30 @@ func LoadDockerAuthConfig(image string) (types.AuthConfig, error) {
 
 	authConfig, err := config.GetAuthConfig(hostName)
 	if err != nil {
-		log.Warnf("Could not get auth config from docker config: %v", err)
+		logger.Warnf("Could not get auth config from docker config: %v", err)
 		return types.AuthConfig{}, err
 	}
 
 	return types.AuthConfig(authConfig), nil
+}
+
+func LoadDockerAuthConfigs(ctx context.Context) map[string]types.AuthConfig {
+	logger := common.Logger(ctx)
+	config, err := config.Load(config.Dir())
+	if err != nil {
+		logger.Warnf("Could not load docker config: %v", err)
+		return nil
+	}
+
+	if !config.ContainsAuth() {
+		config.CredentialsStore = credentials.DetectDefaultStore(config.CredentialsStore)
+	}
+
+	creds, _ := config.GetAllCredentials()
+	authConfigs := make(map[string]types.AuthConfig, len(creds))
+	for k, v := range creds {
+		authConfigs[k] = types.AuthConfig(v)
+	}
+
+	return authConfigs
 }

@@ -1,7 +1,10 @@
 package runner
 
 import (
+	"bytes"
 	"context"
+	"io"
+	"os"
 	"testing"
 
 	"github.com/sirupsen/logrus/hooks/test"
@@ -61,7 +64,7 @@ func TestAddpath(t *testing.T) {
 	a.Equal("/zoo", rc.ExtraPath[0])
 
 	handler("::add-path::/boo\n")
-	a.Equal("/boo", rc.ExtraPath[1])
+	a.Equal("/boo", rc.ExtraPath[0])
 }
 
 func TestStopCommands(t *testing.T) {
@@ -99,7 +102,7 @@ func TestAddpathADO(t *testing.T) {
 	a.Equal("/zoo", rc.ExtraPath[0])
 
 	handler("##[add-path]/boo\n")
-	a.Equal("/boo", rc.ExtraPath[1])
+	a.Equal("/boo", rc.ExtraPath[0])
 }
 
 func TestAddmask(t *testing.T) {
@@ -113,5 +116,74 @@ func TestAddmask(t *testing.T) {
 	handler := rc.commandHandler(loggerCtx)
 	handler("::add-mask::my-secret-value\n")
 
+	a.Equal("  \U00002699  ***", hook.LastEntry().Message)
 	a.NotEqual("  \U00002699  *my-secret-value", hook.LastEntry().Message)
+}
+
+// based on https://stackoverflow.com/a/10476304
+func captureOutput(t *testing.T, f func()) string {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	f()
+
+	outC := make(chan string)
+
+	go func() {
+		var buf bytes.Buffer
+		_, err := io.Copy(&buf, r)
+		if err != nil {
+			a := assert.New(t)
+			a.Fail("io.Copy failed")
+		}
+		outC <- buf.String()
+	}()
+
+	w.Close()
+	os.Stdout = old
+	out := <-outC
+
+	return out
+}
+
+func TestAddmaskUsemask(t *testing.T) {
+	rc := new(RunContext)
+	rc.StepResults = make(map[string]*model.StepResult)
+	rc.CurrentStep = "my-step"
+	rc.StepResults[rc.CurrentStep] = &model.StepResult{
+		Outputs: make(map[string]string),
+	}
+
+	a := assert.New(t)
+
+	config := &Config{
+		Secrets:         map[string]string{},
+		InsecureSecrets: false,
+	}
+
+	re := captureOutput(t, func() {
+		ctx := context.Background()
+		ctx = WithJobLogger(ctx, "0", "testjob", config, &rc.Masks, map[string]interface{}{})
+
+		handler := rc.commandHandler(ctx)
+		handler("::add-mask::secret\n")
+		handler("::set-output:: token=secret\n")
+	})
+
+	a.Equal("[testjob]   \U00002699  ***\n[testjob]   \U00002699  ::set-output:: = token=***\n", re)
+}
+
+func TestSaveState(t *testing.T) {
+	rc := &RunContext{
+		CurrentStep: "step",
+		StepResults: map[string]*model.StepResult{},
+	}
+
+	ctx := context.Background()
+
+	handler := rc.commandHandler(ctx)
+	handler("::save-state name=state-name::state-value\n")
+
+	assert.Equal(t, "state-value", rc.IntraActionState["step"]["state-name"])
 }

@@ -1,46 +1,85 @@
 module github.com/nektos/act
 
-go 1.16
+go 1.18
 
 require (
-	github.com/AlecAivazis/survey/v2 v2.3.2
+	github.com/AlecAivazis/survey/v2 v2.3.6
 	github.com/Masterminds/semver v1.5.0
-	github.com/ProtonMail/go-crypto v0.0.0-20210920160938-87db9fbc61c7 // indirect
+	github.com/adrg/xdg v0.4.0
 	github.com/andreaskoch/go-fswatch v1.0.0
-	github.com/containerd/continuity v0.2.0 // indirect
-	github.com/creack/pty v1.1.11
-	github.com/docker/cli v20.10.12+incompatible
-	github.com/docker/distribution v2.8.0+incompatible
-	github.com/docker/docker v20.10.12+incompatible
-	github.com/go-git/go-billy/v5 v5.3.1
-	github.com/go-git/go-git/v5 v5.4.2
-	github.com/go-ini/ini v1.64.0
-	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
-	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
-	github.com/google/uuid v1.2.0
-	github.com/joho/godotenv v1.4.0
+	github.com/creack/pty v1.1.18
+	github.com/docker/cli v23.0.4+incompatible
+	github.com/docker/distribution v2.8.1+incompatible
+	github.com/docker/docker v23.0.4+incompatible
+	github.com/docker/go-connections v0.4.0
+	github.com/go-git/go-billy/v5 v5.4.1
+	github.com/go-git/go-git/v5 v5.6.0
+	github.com/imdario/mergo v0.3.15
+	github.com/joho/godotenv v1.5.1
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
-	github.com/kevinburke/ssh_config v1.1.0 // indirect
-	github.com/mattn/go-isatty v0.0.14
-	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
-	github.com/mitchellh/go-homedir v1.1.0
-	github.com/moby/buildkit v0.9.3
-	github.com/opencontainers/image-spec v1.0.2
-	github.com/opencontainers/selinux v1.10.0
+	github.com/mattn/go-isatty v0.0.17
+	github.com/moby/buildkit v0.11.6
+	github.com/moby/patternmatcher v0.5.0
+	github.com/opencontainers/image-spec v1.1.0-rc2.0.20221005185240-3a7f492d3f1b
+	github.com/opencontainers/selinux v1.11.0
 	github.com/pkg/errors v0.9.1
-	github.com/rhysd/actionlint v1.6.8
-	github.com/sabhiram/go-gitignore v0.0.0-20201211210132-54b8a0bf510f
-	github.com/sergi/go-diff v1.2.0 // indirect
-	github.com/sirupsen/logrus v1.8.1
-	github.com/spf13/cobra v1.2.1
+	github.com/rhysd/actionlint v1.6.22
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
+	github.com/sirupsen/logrus v1.9.0
+	github.com/spf13/cobra v1.7.0
 	github.com/spf13/pflag v1.0.5
-	github.com/stretchr/testify v1.7.0
-	github.com/xanzy/ssh-agent v0.3.1 // indirect
-	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519 // indirect
-	golang.org/x/net v0.0.0-20210917221730-978cfadd31cf // indirect
-	golang.org/x/term v0.0.0-20210916214954-140adaaadfaf
-	golang.org/x/text v0.3.7 // indirect
-	google.golang.org/genproto v0.0.0-20210921142501-181ce0d877f6 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b
+	github.com/stretchr/testify v1.8.2
+	github.com/timshannon/bolthold v0.0.0-20210913165410-232392fc8a6a
+	go.etcd.io/bbolt v1.3.6
+	golang.org/x/term v0.3.0
+	gopkg.in/yaml.v3 v3.0.1
+	gotest.tools/v3 v3.4.0
+)
+
+require (
+	github.com/Microsoft/go-winio v0.5.2 // indirect
+	github.com/ProtonMail/go-crypto v0.0.0-20230217124315-7d5c6f04bbb8 // indirect
+	github.com/acomagu/bufpipe v1.0.4 // indirect
+	github.com/cloudflare/circl v1.1.0 // indirect
+	github.com/containerd/containerd v1.6.20 // indirect
+	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/docker/docker-credential-helpers v0.7.0 // indirect
+	github.com/docker/go-units v0.5.0 // indirect
+	github.com/emirpasic/gods v1.18.1 // indirect
+	github.com/fatih/color v1.14.1 // indirect
+	github.com/go-git/gcfg v1.5.0 // indirect
+	github.com/gogo/protobuf v1.3.2 // indirect
+	github.com/google/go-cmp v0.5.9 // indirect
+	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510 // indirect
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
+	github.com/kevinburke/ssh_config v1.2.0 // indirect
+	github.com/klauspost/compress v1.15.12 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-runewidth v0.0.14 // indirect
+	github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b // indirect
+	github.com/mitchellh/mapstructure v1.1.2 // indirect
+	github.com/moby/sys/sequential v0.5.0 // indirect
+	github.com/moby/term v0.0.0-20200312100748-672ec06f55cd // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
+	github.com/opencontainers/runc v1.1.5 // indirect
+	github.com/pjbgf/sha1cd v0.3.0 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
+	github.com/rivo/uniseg v0.4.4 // indirect
+	github.com/robfig/cron v1.2.0 // indirect
+	github.com/sergi/go-diff v1.2.0 // indirect
+	github.com/skeema/knownhosts v1.1.0 // indirect
+	github.com/stretchr/objx v0.5.0 // indirect
+	github.com/xanzy/ssh-agent v0.3.3 // indirect
+	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
+	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
+	github.com/xeipuuv/gojsonschema v1.2.0 // indirect
+	golang.org/x/crypto v0.4.0 // indirect
+	golang.org/x/net v0.4.0 // indirect
+	golang.org/x/sync v0.1.0 // indirect
+	golang.org/x/sys v0.3.0 // indirect
+	golang.org/x/text v0.7.0 // indirect
+	gopkg.in/warnings.v0 v0.1.2 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 )

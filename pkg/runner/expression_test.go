@@ -1,11 +1,14 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"testing"
 
+	"github.com/nektos/act/pkg/exprparser"
 	"github.com/nektos/act/pkg/model"
 	assert "github.com/stretchr/testify/assert"
 	yaml "gopkg.in/yaml.v3"
@@ -74,7 +77,7 @@ func createRunContext(t *testing.T) *RunContext {
 
 func TestEvaluateRunContext(t *testing.T) {
 	rc := createRunContext(t)
-	ee := rc.NewExpressionEvaluator()
+	ee := rc.NewExpressionEvaluator(context.Background())
 
 	tables := []struct {
 		in      string
@@ -114,7 +117,6 @@ func TestEvaluateRunContext(t *testing.T) {
 		{"github.run_id", "1", ""},
 		{"github.run_number", "1", ""},
 		{"job.status", "success", ""},
-		{"runner.os", "Linux", ""},
 		{"matrix.os", "Linux", ""},
 		{"matrix.foo", "bar", ""},
 		{"env.key", "value", ""},
@@ -134,7 +136,7 @@ func TestEvaluateRunContext(t *testing.T) {
 		table := table
 		t.Run(table.in, func(t *testing.T) {
 			assertObject := assert.New(t)
-			out, err := ee.evaluate(table.in, false)
+			out, err := ee.evaluate(context.Background(), table.in, exprparser.DefaultStatusCheckNone)
 			if table.errMesg == "" {
 				assertObject.NoError(err, table.in)
 				assertObject.Equal(table.out, out, table.in)
@@ -146,27 +148,27 @@ func TestEvaluateRunContext(t *testing.T) {
 	}
 }
 
-func TestEvaluateStepContext(t *testing.T) {
+func TestEvaluateStep(t *testing.T) {
 	rc := createRunContext(t)
-
-	sc := &StepContext{
+	step := &stepRun{
 		RunContext: rc,
 	}
-	ee := sc.NewExpressionEvaluator()
+
+	ee := rc.NewStepExpressionEvaluator(context.Background(), step)
 
 	tables := []struct {
 		in      string
 		out     interface{}
 		errMesg string
 	}{
-		{"steps.idwithnothing.conclusion", model.StepStatusSuccess, ""},
-		{"steps.idwithnothing.outcome", model.StepStatusFailure, ""},
+		{"steps.idwithnothing.conclusion", model.StepStatusSuccess.String(), ""},
+		{"steps.idwithnothing.outcome", model.StepStatusFailure.String(), ""},
 		{"steps.idwithnothing.outputs.foowithnothing", "barwithnothing", ""},
-		{"steps.id-with-hyphens.conclusion", model.StepStatusSuccess, ""},
-		{"steps.id-with-hyphens.outcome", model.StepStatusFailure, ""},
+		{"steps.id-with-hyphens.conclusion", model.StepStatusSuccess.String(), ""},
+		{"steps.id-with-hyphens.outcome", model.StepStatusFailure.String(), ""},
 		{"steps.id-with-hyphens.outputs.foo-with-hyphens", "bar-with-hyphens", ""},
-		{"steps.id_with_underscores.conclusion", model.StepStatusSuccess, ""},
-		{"steps.id_with_underscores.outcome", model.StepStatusFailure, ""},
+		{"steps.id_with_underscores.conclusion", model.StepStatusSuccess.String(), ""},
+		{"steps.id_with_underscores.outcome", model.StepStatusFailure.String(), ""},
 		{"steps.id_with_underscores.outputs.foo_with_underscores", "bar_with_underscores", ""},
 	}
 
@@ -174,7 +176,7 @@ func TestEvaluateStepContext(t *testing.T) {
 		table := table
 		t.Run(table.in, func(t *testing.T) {
 			assertObject := assert.New(t)
-			out, err := ee.evaluate(table.in, false)
+			out, err := ee.evaluate(context.Background(), table.in, exprparser.DefaultStatusCheckNone)
 			if table.errMesg == "" {
 				assertObject.NoError(err, table.in)
 				assertObject.Equal(table.out, out, table.in)
@@ -211,7 +213,7 @@ func TestInterpolate(t *testing.T) {
 			},
 		},
 	}
-	ee := rc.NewExpressionEvaluator()
+	ee := rc.NewExpressionEvaluator(context.Background())
 	tables := []struct {
 		in  string
 		out string
@@ -253,7 +255,7 @@ func TestInterpolate(t *testing.T) {
 		table := table
 		t.Run("interpolate", func(t *testing.T) {
 			assertObject := assert.New(t)
-			out := ee.Interpolate(table.in)
+			out := ee.Interpolate(context.Background(), table.in)
 			assertObject.Equal(table.out, out, table.in)
 		})
 	}
@@ -330,7 +332,7 @@ func TestRewriteSubExpression(t *testing.T) {
 	for _, table := range table {
 		t.Run("TestRewriteSubExpression", func(t *testing.T) {
 			assertObject := assert.New(t)
-			out, err := rewriteSubExpression(table.in, false)
+			out, err := rewriteSubExpression(context.Background(), table.in, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -354,7 +356,7 @@ func TestRewriteSubExpressionForceFormat(t *testing.T) {
 	for _, table := range table {
 		t.Run("TestRewriteSubExpressionForceFormat", func(t *testing.T) {
 			assertObject := assert.New(t)
-			out, err := rewriteSubExpression(table.in, true)
+			out, err := rewriteSubExpression(context.Background(), table.in, true)
 			if err != nil {
 				t.Fatal(err)
 			}

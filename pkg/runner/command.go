@@ -16,22 +16,27 @@ func init() {
 	commandPatternADO = regexp.MustCompile("^##\\[([^ ]+)( (.+))?]([^\r\n]*)[\r\n]+$")
 }
 
+func tryParseRawActionCommand(line string) (command string, kvPairs map[string]string, arg string, ok bool) {
+	if m := commandPatternGA.FindStringSubmatch(line); m != nil {
+		command = m[1]
+		kvPairs = parseKeyValuePairs(m[3], ",")
+		arg = m[4]
+		ok = true
+	} else if m := commandPatternADO.FindStringSubmatch(line); m != nil {
+		command = m[1]
+		kvPairs = parseKeyValuePairs(m[3], ";")
+		arg = m[4]
+		ok = true
+	}
+	return
+}
+
 func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 	logger := common.Logger(ctx)
 	resumeCommand := ""
 	return func(line string) bool {
-		var command string
-		var kvPairs map[string]string
-		var arg string
-		if m := commandPatternGA.FindStringSubmatch(line); m != nil {
-			command = m[1]
-			kvPairs = parseKeyValuePairs(m[3], ",")
-			arg = m[4]
-		} else if m := commandPatternADO.FindStringSubmatch(line); m != nil {
-			command = m[1]
-			kvPairs = parseKeyValuePairs(m[3], ";")
-			arg = m[4]
-		} else {
+		command, kvPairs, arg, ok := tryParseRawActionCommand(line)
+		if !ok {
 			return true
 		}
 
@@ -55,6 +60,7 @@ func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 		case "error":
 			logger.Infof("  \U00002757  %s", line)
 		case "add-mask":
+			rc.AddMask(arg)
 			logger.Infof("  \U00002699  %s", "***")
 		case "stop-commands":
 			resumeCommand = arg
@@ -62,6 +68,11 @@ func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 		case resumeCommand:
 			resumeCommand = ""
 			logger.Infof("  \U00002699  %s", line)
+		case "save-state":
+			logger.Infof("  \U0001f4be  %s", line)
+			rc.saveState(ctx, kvPairs, arg)
+		case "add-matcher":
+			logger.Infof("  \U00002753 add-matcher %s", arg)
 		default:
 			logger.Infof("  \U00002753  %s", line)
 		}
@@ -71,13 +82,26 @@ func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 }
 
 func (rc *RunContext) setEnv(ctx context.Context, kvPairs map[string]string, arg string) {
-	common.Logger(ctx).Infof("  \U00002699  ::set-env:: %s=%s", kvPairs["name"], arg)
+	name := kvPairs["name"]
+	common.Logger(ctx).Infof("  \U00002699  ::set-env:: %s=%s", name, arg)
 	if rc.Env == nil {
 		rc.Env = make(map[string]string)
 	}
-	rc.Env[kvPairs["name"]] = arg
+	if rc.GlobalEnv == nil {
+		rc.GlobalEnv = map[string]string{}
+	}
+	newenv := map[string]string{
+		name: arg,
+	}
+	mergeIntoMap := mergeIntoMapCaseSensitive
+	if rc.JobContainer != nil && rc.JobContainer.IsEnvironmentCaseInsensitive() {
+		mergeIntoMap = mergeIntoMapCaseInsensitive
+	}
+	mergeIntoMap(rc.Env, newenv)
+	mergeIntoMap(rc.GlobalEnv, newenv)
 }
 func (rc *RunContext) setOutput(ctx context.Context, kvPairs map[string]string, arg string) {
+	logger := common.Logger(ctx)
 	stepID := rc.CurrentStep
 	outputName := kvPairs["name"]
 	if outputMapping, ok := rc.OutputMappings[MappableOutput{StepID: stepID, OutputName: outputName}]; ok {
@@ -87,16 +111,22 @@ func (rc *RunContext) setOutput(ctx context.Context, kvPairs map[string]string, 
 
 	result, ok := rc.StepResults[stepID]
 	if !ok {
-		common.Logger(ctx).Infof("  \U00002757  no outputs used step '%s'", stepID)
+		logger.Infof("  \U00002757  no outputs used step '%s'", stepID)
 		return
 	}
 
-	common.Logger(ctx).Infof("  \U00002699  ::set-output:: %s=%s", outputName, arg)
+	logger.Infof("  \U00002699  ::set-output:: %s=%s", outputName, arg)
 	result.Outputs[outputName] = arg
 }
 func (rc *RunContext) addPath(ctx context.Context, arg string) {
 	common.Logger(ctx).Infof("  \U00002699  ::add-path:: %s", arg)
-	rc.ExtraPath = append(rc.ExtraPath, arg)
+	extraPath := []string{arg}
+	for _, v := range rc.ExtraPath {
+		if v != arg {
+			extraPath = append(extraPath, v)
+		}
+	}
+	rc.ExtraPath = extraPath
 }
 
 func parseKeyValuePairs(kvPairs string, separator string) map[string]string {
@@ -139,4 +169,19 @@ func unescapeKvPairs(kvPairs map[string]string) map[string]string {
 		kvPairs[k] = unescapeCommandProperty(v)
 	}
 	return kvPairs
+}
+
+func (rc *RunContext) saveState(ctx context.Context, kvPairs map[string]string, arg string) {
+	stepID := rc.CurrentStep
+	if stepID != "" {
+		if rc.IntraActionState == nil {
+			rc.IntraActionState = map[string]map[string]string{}
+		}
+		state, ok := rc.IntraActionState[stepID]
+		if !ok {
+			state = map[string]string{}
+			rc.IntraActionState[stepID] = state
+		}
+		state[kvPairs["name"]] = arg
+	}
 }

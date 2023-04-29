@@ -5,20 +5,21 @@ on:
       - v*
 
 env:
-  GO_VERSION: 1.17
+  GO_VERSION: 1.18
 
 jobs:
   release:
     name: release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v2
+      - uses: actions/setup-go@v4
         with:
           go-version: ${{ env.GO_VERSION }}
-      - uses: actions/cache@v2
+          check-latest: true
+      - uses: actions/cache@v3
         if: ${{ !env.ACT }}
         with:
           path: ~/go/pkg/mod
@@ -26,7 +27,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
       - name: GoReleaser
-        uses: goreleaser/goreleaser-action@v1
+        uses: goreleaser/goreleaser-action@v4
         with:
           version: latest
           args: release --rm-dist
@@ -38,3 +39,29 @@ jobs:
           version: ${{ github.ref }}
           apiKey: ${{ secrets.CHOCO_APIKEY }}
           push: true
+      - name: GitHub CLI extension
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GORELEASER_GITHUB_TOKEN }}
+          script: |
+            const mainRef = (await github.rest.git.getRef({
+              owner: 'nektos',
+              repo: 'gh-act',
+              ref: 'heads/main',
+            })).data;
+            console.log(mainRef);
+            github.rest.git.createRef({
+              owner: 'nektos',
+              repo: 'gh-act',
+              ref: context.ref,
+              sha: mainRef.object.sha,
+            });
+  winget:
+    needs: release
+    runs-on: windows-latest # Action can only run on Windows
+    steps:
+      - uses: vedantmgoyal2009/winget-releaser@v2
+        with:
+          identifier: nektos.act
+          installers-regex: '_Windows_\w+\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}

@@ -9,13 +9,13 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/julienschmidt/httprouter"
+
 	"github.com/nektos/act/pkg/common"
-	log "github.com/sirupsen/logrus"
 )
 
 type FileContainerResourceURL struct {
@@ -46,28 +46,53 @@ type ResponseMessage struct {
 	Message string `json:"message"`
 }
 
-type MkdirFS interface {
-	fs.FS
-	MkdirAll(path string, perm fs.FileMode) error
-	Open(name string) (fs.File, error)
+type WritableFile interface {
+	io.WriteCloser
 }
 
-type MkdirFsImpl struct {
-	dir string
-	fs.FS
+type WriteFS interface {
+	OpenWritable(name string) (WritableFile, error)
+	OpenAppendable(name string) (WritableFile, error)
 }
 
-func (fsys MkdirFsImpl) MkdirAll(path string, perm fs.FileMode) error {
-	return os.MkdirAll(fsys.dir+"/"+path, perm)
+type readWriteFSImpl struct {
 }
 
-func (fsys MkdirFsImpl) Open(name string) (fs.File, error) {
-	return os.OpenFile(fsys.dir+"/"+name, os.O_CREATE|os.O_RDWR, 0644)
+func (fwfs readWriteFSImpl) Open(name string) (fs.File, error) {
+	return os.Open(name)
+}
+
+func (fwfs readWriteFSImpl) OpenWritable(name string) (WritableFile, error) {
+	if err := os.MkdirAll(filepath.Dir(name), os.ModePerm); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+}
+
+func (fwfs readWriteFSImpl) OpenAppendable(name string) (WritableFile, error) {
+	if err := os.MkdirAll(filepath.Dir(name), os.ModePerm); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR, 0o644)
+
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = file.Seek(0, os.SEEK_END)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
 }
 
 var gzipExtension = ".gz__"
 
-func uploads(router *httprouter.Router, fsys MkdirFS) {
+func safeResolve(baseDir string, relPath string) string {
+	return filepath.Join(baseDir, filepath.Clean(filepath.Join(string(os.PathSeparator), relPath)))
+}
+
+func uploads(router *httprouter.Router, baseDir string, fsys WriteFS) {
 	router.POST("/_apis/pipelines/workflows/:runId/artifacts", func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
 		runID := params.ByName("runId")
 
@@ -92,14 +117,17 @@ func uploads(router *httprouter.Router, fsys MkdirFS) {
 			itemPath += gzipExtension
 		}
 
-		filePath := fmt.Sprintf("%s/%s", runID, itemPath)
+		safeRunPath := safeResolve(baseDir, runID)
+		safePath := safeResolve(safeRunPath, itemPath)
 
-		err := fsys.MkdirAll(path.Dir(filePath), os.ModePerm)
-		if err != nil {
-			panic(err)
-		}
+		file, err := func() (WritableFile, error) {
+			contentRange := req.Header.Get("Content-Range")
+			if contentRange != "" && !strings.HasPrefix(contentRange, "bytes 0-") {
+				return fsys.OpenAppendable(safePath)
+			}
+			return fsys.OpenWritable(safePath)
+		}()
 
-		file, err := fsys.Open(filePath)
 		if err != nil {
 			panic(err)
 		}
@@ -147,11 +175,13 @@ func uploads(router *httprouter.Router, fsys MkdirFS) {
 	})
 }
 
-func downloads(router *httprouter.Router, fsys fs.FS) {
+func downloads(router *httprouter.Router, baseDir string, fsys fs.FS) {
 	router.GET("/_apis/pipelines/workflows/:runId/artifacts", func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
 		runID := params.ByName("runId")
 
-		entries, err := fs.ReadDir(fsys, runID)
+		safePath := safeResolve(baseDir, runID)
+
+		entries, err := fs.ReadDir(fsys, safePath)
 		if err != nil {
 			panic(err)
 		}
@@ -181,12 +211,12 @@ func downloads(router *httprouter.Router, fsys fs.FS) {
 	router.GET("/download/:container", func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
 		container := params.ByName("container")
 		itemPath := req.URL.Query().Get("itemPath")
-		dirPath := fmt.Sprintf("%s/%s", container, itemPath)
+		safePath := safeResolve(baseDir, filepath.Join(container, itemPath))
 
 		var files []ContainerItem
-		err := fs.WalkDir(fsys, dirPath, func(path string, entry fs.DirEntry, err error) error {
+		err := fs.WalkDir(fsys, safePath, func(path string, entry fs.DirEntry, err error) error {
 			if !entry.IsDir() {
-				rel, err := filepath.Rel(dirPath, path)
+				rel, err := filepath.Rel(safePath, path)
 				if err != nil {
 					panic(err)
 				}
@@ -195,7 +225,7 @@ func downloads(router *httprouter.Router, fsys fs.FS) {
 				rel = strings.TrimSuffix(rel, gzipExtension)
 
 				files = append(files, ContainerItem{
-					Path:            fmt.Sprintf("%s/%s", itemPath, rel),
+					Path:            filepath.Join(itemPath, rel),
 					ItemType:        "file",
 					ContentLocation: fmt.Sprintf("http://%s/artifact/%s/%s/%s", req.Host, container, itemPath, rel),
 				})
@@ -222,10 +252,12 @@ func downloads(router *httprouter.Router, fsys fs.FS) {
 	router.GET("/artifact/*path", func(w http.ResponseWriter, req *http.Request, params httprouter.Params) {
 		path := params.ByName("path")[1:]
 
-		file, err := fsys.Open(path)
+		safePath := safeResolve(baseDir, path)
+
+		file, err := fsys.Open(safePath)
 		if err != nil {
 			// try gzip file
-			file, err = fsys.Open(path + gzipExtension)
+			file, err = fsys.Open(safePath + gzipExtension)
 			if err != nil {
 				panic(err)
 			}
@@ -239,8 +271,9 @@ func downloads(router *httprouter.Router, fsys fs.FS) {
 	})
 }
 
-func Serve(ctx context.Context, artifactPath string, port string) context.CancelFunc {
+func Serve(ctx context.Context, artifactPath string, addr string, port string) context.CancelFunc {
 	serverContext, cancel := context.WithCancel(ctx)
+	logger := common.Logger(serverContext)
 
 	if artifactPath == "" {
 		return cancel
@@ -248,19 +281,22 @@ func Serve(ctx context.Context, artifactPath string, port string) context.Cancel
 
 	router := httprouter.New()
 
-	log.Debugf("Artifacts base path '%s'", artifactPath)
-	fs := os.DirFS(artifactPath)
-	uploads(router, MkdirFsImpl{artifactPath, fs})
-	downloads(router, fs)
-	ip := common.GetOutboundIP().String()
+	logger.Debugf("Artifacts base path '%s'", artifactPath)
+	fsys := readWriteFSImpl{}
+	uploads(router, artifactPath, fsys)
+	downloads(router, artifactPath, fsys)
 
-	server := &http.Server{Addr: fmt.Sprintf("%s:%s", ip, port), Handler: router}
+	server := &http.Server{
+		Addr:              fmt.Sprintf("%s:%s", addr, port),
+		ReadHeaderTimeout: 2 * time.Second,
+		Handler:           router,
+	}
 
 	// run server
 	go func() {
-		log.Infof("Start server on http://%s:%s", ip, port)
+		logger.Infof("Start server on http://%s:%s", addr, port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			logger.Fatal(err)
 		}
 	}()
 
@@ -269,7 +305,7 @@ func Serve(ctx context.Context, artifactPath string, port string) context.Cancel
 		<-serverContext.Done()
 
 		if err := server.Shutdown(ctx); err != nil {
-			log.Errorf("Failed shutdown gracefully - force shutdown: %v", err)
+			logger.Errorf("Failed shutdown gracefully - force shutdown: %v", err)
 			server.Close()
 		}
 	}()

@@ -8,21 +8,21 @@
 
 **Note 2: `node` `-slim` images don't have `python` installed, if you want to use actions or software that is depending on `python`, you need to specify image manually**
 
-| Image                               | Size                                                   |
-| ----------------------------------- | ------------------------------------------------------ |
-| [`node:12-buster`][hub/_/node]      | ![`buster-size`][hub/_/node/12-buster/size]            |
-| [`node:12-buster-slim`][hub/_/node] | ![`micro-buster-size`][hub/_/node/12-buster-slim/size] |
-| [`node:16-buster`][hub/_/node]      | ![`buster-size`][hub/_/node/16-buster/size]            |
-| [`node:16-buster-slim`][hub/_/node] | ![`micro-buster-size`][hub/_/node/16-buster-slim/size] |
+| Image                                 | Size                                                       |
+| ------------------------------------- | ---------------------------------------------------------- |
+| [`node:16-bullseye`][hub/_/node]      | ![`bullseye-size`][hub/_/node/16-bullseye/size]            |
+| [`node:16-bullseye-slim`][hub/_/node] | ![`micro-bullseye-size`][hub/_/node/16-bullseye-slim/size] |
+| [`node:16-buster`][hub/_/node]        | ![`buster-size`][hub/_/node/16-buster/size]                |
+| [`node:16-buster-slim`][hub/_/node]   | ![`micro-buster-size`][hub/_/node/16-buster-slim/size]     |
 
 **Note: `catthehacker/ubuntu` images are based on Ubuntu root filesystem**
 
-| Image                                                                | GitHub Repository                                             |
-| -------------------------------------------------------------------- | ------------------------------------------------------------- |
-| [`ghcr.io/catthehacker/ubuntu:act-latest`][ghcr/catthehacker/ubuntu] | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
-| [`ghcr.io/catthehacker/ubuntu:act-20.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
-| [`ghcr.io/catthehacker/ubuntu:act-18.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
-| [`ghcr.io/catthehacker/ubuntu:act-16.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
+| Image                                                        | GitHub Repository                                             |
+| ------------------------------------------------------------ | ------------------------------------------------------------- |
+| [`catthehacker/ubuntu:act-latest`][ghcr/catthehacker/ubuntu] | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
+| [`catthehacker/ubuntu:act-22.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
+| [`catthehacker/ubuntu:act-20.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
+| [`catthehacker/ubuntu:act-18.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/docker-images`][gh/catthehacker/docker_images] |
 
 ## Images based on [`actions/virtual-environments`][gh/actions/virtual-environments]
 
@@ -34,18 +34,18 @@
 | [`nektos/act-environments-ubuntu:18.04-lite`][hub/nektos/act-environments-ubuntu] | ![`nektos:18.04-lite`][hub/nektos/act-environments-ubuntu/18.04-lite/size] | [`nektos/act-environments`][gh/nektos/act-environments] |
 | [`nektos/act-environments-ubuntu:18.04-full`][hub/nektos/act-environments-ubuntu] | ![`nektos:18.04-full`][hub/nektos/act-environments-ubuntu/18.04-full/size] | [`nektos/act-environments`][gh/nektos/act-environments] |
 
-| Image                                                                 | GitHub Repository                                                                     |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| [`ghcr.io/catthehacker/ubuntu:full-latest`][ghcr/catthehacker/ubuntu] | [`catthehacker/virtual-environments-fork`][gh/catthehacker/virtual-environments-fork] |
-| [`ghcr.io/catthehacker/ubuntu:full-20.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/virtual-environments-fork`][gh/catthehacker/virtual-environments-fork] |
-| [`ghcr.io/catthehacker/ubuntu:full-18.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/virtual-environments-fork`][gh/catthehacker/virtual-environments-fork] |
+| Image                                                         | GitHub Repository                                                                     |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [`catthehacker/ubuntu:full-latest`][ghcr/catthehacker/ubuntu] | [`catthehacker/virtual-environments-fork`][gh/catthehacker/virtual-environments-fork] |
+| [`catthehacker/ubuntu:full-20.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/virtual-environments-fork`][gh/catthehacker/virtual-environments-fork] |
+| [`catthehacker/ubuntu:full-18.04`][ghcr/catthehacker/ubuntu]  | [`catthehacker/virtual-environments-fork`][gh/catthehacker/virtual-environments-fork] |
 
 Feel free to make a pull request with your image added here
 
 [hub/_/buildpack-deps]: https://hub.docker.com/_/buildpack-deps
 [hub/_/node]: https://hub.docker.com/r/_/node
-[hub/_/node/12-buster/size]: https://img.shields.io/docker/image-size/_/node/12-buster
-[hub/_/node/12-buster-slim/size]: https://img.shields.io/docker/image-size/_/node/12-buster-slim
+[hub/_/node/16-bullseye/size]: https://img.shields.io/docker/image-size/_/node/16-bullseye
+[hub/_/node/16-bullseye-slim/size]: https://img.shields.io/docker/image-size/_/node/16-bullseye-slim
 [hub/_/node/16-buster/size]: https://img.shields.io/docker/image-size/_/node/16-buster
 [hub/_/node/16-buster-slim/size]: https://img.shields.io/docker/image-size/_/node/16-buster-slim
 [ghcr/catthehacker/ubuntu]: https://github.com/catthehacker/docker_images/pkgs/container/ubuntu

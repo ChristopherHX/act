@@ -16,14 +16,24 @@ type EvaluationEnvironment struct {
 	Github      *model.GithubContext
 	Env         map[string]string
 	Job         *model.JobContext
+	Jobs        *map[string]*model.WorkflowCallResult
 	Steps       map[string]*model.StepResult
 	Runner      map[string]interface{}
 	Secrets     map[string]string
 	Strategy    map[string]interface{}
 	Matrix      map[string]interface{}
-	Needs       map[string]map[string]map[string]string
+	Needs       map[string]Needs
 	Inputs      map[string]interface{}
 	ContextData map[string]interface{}
+	Hashfiles   func([]reflect.Value) (interface{}, error)
+	EnvCaseSens bool
+}
+
+type CaseSensitiveDict map[string]string
+
+type Needs struct {
+	Outputs map[string]string `json:"outputs"`
+	Result  string            `json:"result"`
 }
 
 type Config struct {
@@ -32,8 +42,32 @@ type Config struct {
 	Context    string
 }
 
+type DefaultStatusCheck int
+
+const (
+	DefaultStatusCheckNone DefaultStatusCheck = iota
+	DefaultStatusCheckSuccess
+	DefaultStatusCheckAlways
+	DefaultStatusCheckCanceled
+	DefaultStatusCheckFailure
+)
+
+func (dsc DefaultStatusCheck) String() string {
+	switch dsc {
+	case DefaultStatusCheckSuccess:
+		return "success"
+	case DefaultStatusCheckAlways:
+		return "always"
+	case DefaultStatusCheckCanceled:
+		return "cancelled"
+	case DefaultStatusCheckFailure:
+		return "failure"
+	}
+	return ""
+}
+
 type Interpreter interface {
-	Evaluate(input string, isIfExpression bool) (interface{}, error)
+	Evaluate(input string, defaultStatusCheck DefaultStatusCheck) (interface{}, error)
 }
 
 type interperterImpl struct {
@@ -48,9 +82,9 @@ func NewInterpeter(env *EvaluationEnvironment, config Config) Interpreter {
 	}
 }
 
-func (impl *interperterImpl) Evaluate(input string, isIfExpression bool) (interface{}, error) {
+func (impl *interperterImpl) Evaluate(input string, defaultStatusCheck DefaultStatusCheck) (interface{}, error) {
 	input = strings.TrimPrefix(input, "${{")
-	if isIfExpression && input == "" {
+	if defaultStatusCheck != DefaultStatusCheckNone && input == "" {
 		input = "success()"
 	}
 	parser := actionlint.NewExprParser()
@@ -59,7 +93,7 @@ func (impl *interperterImpl) Evaluate(input string, isIfExpression bool) (interf
 		return nil, fmt.Errorf("Failed to parse: %s", err.Message)
 	}
 
-	if isIfExpression {
+	if defaultStatusCheck != DefaultStatusCheckNone {
 		hasStatusCheckFunction := false
 		actionlint.VisitExprNode(exprNode, func(node, _ actionlint.ExprNode, entering bool) {
 			if funcCallNode, ok := node.(*actionlint.FuncCallNode); entering && ok {
@@ -74,7 +108,7 @@ func (impl *interperterImpl) Evaluate(input string, isIfExpression bool) (interf
 			exprNode = &actionlint.LogicalOpNode{
 				Kind: actionlint.LogicalOpNodeKindAnd,
 				Left: &actionlint.FuncCallNode{
-					Callee: "success",
+					Callee: defaultStatusCheck.String(),
 					Args:   []actionlint.ExprNode{},
 				},
 				Right: exprNode,
@@ -137,13 +171,21 @@ func (impl *interperterImpl) evaluateVariable(variableNode *actionlint.VariableN
 		}
 		return cd, nil
 	}
-	switch strings.ToLower(variableNode.Name) {
+	switch lowerName {
 	case "github":
 		return impl.env.Github, nil
 	case "env":
+		if impl.env.EnvCaseSens {
+			return CaseSensitiveDict(impl.env.Env), nil
+		}
 		return impl.env.Env, nil
 	case "job":
 		return impl.env.Job, nil
+	case "jobs":
+		if impl.env.Jobs == nil {
+			return nil, fmt.Errorf("Unavailable context: jobs")
+		}
+		return impl.env.Jobs, nil
 	case "steps":
 		return impl.env.Steps, nil
 	case "runner":
@@ -216,13 +258,6 @@ func (impl *interperterImpl) evaluateArrayDeref(arrayDerefNode *actionlint.Array
 	if err != nil {
 		return nil, err
 	}
-	if mapping, ok := left.(map[string]interface{}); ok {
-		arr := []interface{}{}
-		for _, v := range mapping {
-			arr = append(arr, v)
-		}
-		return reflect.ValueOf(arr).Interface(), nil
-	}
 
 	return impl.getSafeValue(reflect.ValueOf(left)), nil
 }
@@ -234,6 +269,11 @@ func (impl *interperterImpl) getPropertyValue(left reflect.Value, property strin
 
 	case reflect.Struct:
 		leftType := left.Type()
+		var cd CaseSensitiveDict
+		if leftType == reflect.TypeOf(cd) {
+			cd = left.Interface().(CaseSensitiveDict)
+			return cd[property], nil
+		}
 		for i := 0; i < leftType.NumField(); i++ {
 			jsonName := leftType.Field(i).Tag.Get("json")
 			if jsonName == property {
@@ -312,7 +352,7 @@ func (impl *interperterImpl) evaluateNot(notNode *actionlint.NotOpNode) (interfa
 		return nil, err
 	}
 
-	return !impl.isTruthy(reflect.ValueOf(operand)), nil
+	return !IsTruthy(operand), nil
 }
 
 func (impl *interperterImpl) evaluateCompare(compareNode *actionlint.CompareOpNode) (interface{}, error) {
@@ -343,6 +383,8 @@ func (impl *interperterImpl) compareValues(leftValue reflect.Value, rightValue r
 	}
 
 	switch leftValue.Kind() {
+	case reflect.Bool:
+		return impl.compareNumber(float64(impl.coerceToNumber(leftValue).Int()), float64(impl.coerceToNumber(rightValue).Int()), kind)
 	case reflect.String:
 		return impl.compareString(strings.ToLower(leftValue.String()), strings.ToLower(rightValue.String()), kind)
 
@@ -360,8 +402,16 @@ func (impl *interperterImpl) compareValues(leftValue reflect.Value, rightValue r
 
 		return impl.compareNumber(leftValue.Float(), rightValue.Float(), kind)
 
+	case reflect.Invalid:
+		if rightValue.Kind() == reflect.Invalid {
+			return true, nil
+		}
+
+		// not possible situation - params are converted to the same type in code above
+		return nil, fmt.Errorf("Compare params of Invalid type: left: %+v, right: %+v", leftValue.Kind(), rightValue.Kind())
+
 	default:
-		return nil, fmt.Errorf("TODO: evaluateCompare not implemented %+v", reflect.TypeOf(leftValue))
+		return nil, fmt.Errorf("Compare not implemented for types: left: %+v, right: %+v", leftValue.Kind(), rightValue.Kind())
 	}
 }
 
@@ -384,7 +434,7 @@ func (impl *interperterImpl) coerceToNumber(value reflect.Value) reflect.Value {
 		}
 
 		// try to parse the string as a number
-		evaluated, err := impl.Evaluate(value.String(), false)
+		evaluated, err := impl.Evaluate(value.String(), DefaultStatusCheckNone)
 		if err != nil {
 			return reflect.ValueOf(math.NaN())
 		}
@@ -472,7 +522,8 @@ func (impl *interperterImpl) compareNumber(left float64, right float64, kind act
 	}
 }
 
-func (impl *interperterImpl) isTruthy(value reflect.Value) bool {
+func IsTruthy(input interface{}) bool {
+	value := reflect.ValueOf(input)
 	switch value.Kind() {
 	case reflect.Bool:
 		return value.Bool()
@@ -490,10 +541,7 @@ func (impl *interperterImpl) isTruthy(value reflect.Value) bool {
 
 		return value.Float() != 0
 
-	case reflect.Map:
-		return true
-
-	case reflect.Slice:
+	case reflect.Map, reflect.Slice:
 		return true
 
 	default:
@@ -532,6 +580,10 @@ func (impl *interperterImpl) evaluateLogicalCompare(compareNode *actionlint.Logi
 
 	leftValue := reflect.ValueOf(left)
 
+	if IsTruthy(left) == (compareNode.Kind == actionlint.LogicalOpNodeKindOr) {
+		return impl.getSafeValue(leftValue), nil
+	}
+
 	right, err := impl.evaluateNode(compareNode.Right)
 	if err != nil {
 		return nil, err
@@ -541,24 +593,15 @@ func (impl *interperterImpl) evaluateLogicalCompare(compareNode *actionlint.Logi
 
 	switch compareNode.Kind {
 	case actionlint.LogicalOpNodeKindAnd:
-		if impl.isTruthy(leftValue) {
-			return impl.getSafeValue(rightValue), nil
-		}
-
-		return impl.getSafeValue(leftValue), nil
-
+		return impl.getSafeValue(rightValue), nil
 	case actionlint.LogicalOpNodeKindOr:
-		if impl.isTruthy(leftValue) {
-			return impl.getSafeValue(leftValue), nil
-		}
-
 		return impl.getSafeValue(rightValue), nil
 	}
 
 	return nil, fmt.Errorf("Unable to compare incompatibles types '%s' and '%s'", leftValue.Kind(), rightValue.Kind())
 }
 
-// nolint:gocyclo
+//nolint:gocyclo
 func (impl *interperterImpl) evaluateFuncCall(funcCallNode *actionlint.FuncCallNode) (interface{}, error) {
 	args := make([]reflect.Value, 0)
 
@@ -590,6 +633,9 @@ func (impl *interperterImpl) evaluateFuncCall(funcCallNode *actionlint.FuncCallN
 	case "fromjson":
 		return impl.fromJSON(args[0])
 	case "hashfiles":
+		if impl.env.Hashfiles != nil {
+			return impl.env.Hashfiles(args)
+		}
 		return impl.hashFiles(args...)
 	case "always":
 		return impl.always()

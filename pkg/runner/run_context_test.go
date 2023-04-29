@@ -4,15 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/nektos/act/pkg/exprparser"
 	"github.com/nektos/act/pkg/model"
 
 	log "github.com/sirupsen/logrus"
-	"github.com/sirupsen/logrus/hooks/test"
 	assert "github.com/stretchr/testify/assert"
 	yaml "gopkg.in/yaml.v3"
 )
@@ -25,7 +26,6 @@ func TestRunContext_EvalBool(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	hook := test.NewGlobal()
 	rc := &RunContext{
 		Config: &Config{
 			Workdir: ".",
@@ -62,7 +62,7 @@ func TestRunContext_EvalBool(t *testing.T) {
 			},
 		},
 	}
-	rc.ExprEval = rc.NewExpressionEvaluator()
+	rc.ExprEval = rc.NewExpressionEvaluator(context.Background())
 
 	tables := []struct {
 		in      string
@@ -144,6 +144,7 @@ func TestRunContext_EvalBool(t *testing.T) {
 		// Check github context
 		{in: "github.actor == 'nektos/act'", out: true},
 		{in: "github.actor == 'unknown'", out: false},
+		{in: "github.job == 'job1'", out: true},
 		// The special ACT flag
 		{in: "${{ env.ACT }}", out: true},
 		{in: "${{ !env.ACT }}", out: false},
@@ -156,14 +157,12 @@ func TestRunContext_EvalBool(t *testing.T) {
 		table := table
 		t.Run(table.in, func(t *testing.T) {
 			assertObject := assert.New(t)
-			defer hook.Reset()
-			b, err := EvalBool(rc.ExprEval, table.in)
+			b, err := EvalBool(context.Background(), rc.ExprEval, table.in, exprparser.DefaultStatusCheckSuccess)
 			if table.wantErr {
 				assertObject.Error(err)
 			}
 
 			assertObject.Equal(table.out, b, fmt.Sprintf("Expected %s to be %v, was %v", table.in, table.out, b))
-			assertObject.Empty(hook.LastEntry(), table.in)
 		})
 	}
 }
@@ -292,6 +291,54 @@ func TestRunContext_GetBindsAndMounts(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("ContainerVolumeMountTest", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			volumes   []string
+			wantbind  string
+			wantmount map[string]string
+		}{
+			{"BindAnonymousVolume", []string{"/volume"}, "/volume", map[string]string{}},
+			{"BindHostFile", []string{"/path/to/file/on/host:/volume"}, "/path/to/file/on/host:/volume", map[string]string{}},
+			{"MountExistingVolume", []string{"volume-id:/volume"}, "", map[string]string{"volume-id": "/volume"}},
+		}
+
+		for _, testcase := range tests {
+			t.Run(testcase.name, func(t *testing.T) {
+				job := &model.Job{}
+				err := job.RawContainer.Encode(map[string][]string{
+					"volumes": testcase.volumes,
+				})
+				assert.NoError(t, err)
+
+				rc := &RunContext{
+					Name: "TestRCName",
+					Run: &model.Run{
+						Workflow: &model.Workflow{
+							Name: "TestWorkflowName",
+						},
+					},
+					Config: &Config{
+						BindWorkdir: false,
+					},
+				}
+				rc.Run.JobID = "job1"
+				rc.Run.Workflow.Jobs = map[string]*model.Job{"job1": job}
+
+				gotbind, gotmount := rc.GetBindsAndMounts()
+
+				if len(testcase.wantbind) > 0 {
+					assert.Contains(t, gotbind, testcase.wantbind)
+				}
+
+				for k, v := range testcase.wantmount {
+					assert.Contains(t, gotmount, k)
+					assert.Equal(t, gotmount[k], v)
+				}
+			})
+		}
+	})
 }
 
 func TestGetGitHubContext(t *testing.T) {
@@ -318,8 +365,9 @@ func TestGetGitHubContext(t *testing.T) {
 		StepResults:    map[string]*model.StepResult{},
 		OutputMappings: map[MappableOutput]MappableOutput{},
 	}
+	rc.Run.JobID = "job1"
 
-	ghc := rc.getGithubContext()
+	ghc := rc.getGithubContext(context.Background())
 
 	log.Debugf("%v", ghc)
 
@@ -339,15 +387,56 @@ func TestGetGitHubContext(t *testing.T) {
 	}
 
 	assert.Equal(t, ghc.RunID, "1")
-	assert.Equal(t, ghc.Workspace, rc.containerPath(cwd))
 	assert.Equal(t, ghc.RunNumber, "1")
 	assert.Equal(t, ghc.RetentionDays, "0")
 	assert.Equal(t, ghc.Actor, actor)
 	assert.Equal(t, ghc.Repository, repo)
 	assert.Equal(t, ghc.RepositoryOwner, owner)
 	assert.Equal(t, ghc.RunnerPerflog, "/dev/null")
-	assert.Equal(t, ghc.EventPath, rc.GetActPath()+"/workflow/event.json")
 	assert.Equal(t, ghc.Token, rc.Config.Secrets["GITHUB_TOKEN"])
+	assert.Equal(t, ghc.Job, "job1")
+}
+
+func TestGetGithubContextRef(t *testing.T) {
+	table := []struct {
+		event string
+		json  string
+		ref   string
+	}{
+		{event: "push", json: `{"ref":"0000000000000000000000000000000000000000"}`, ref: "0000000000000000000000000000000000000000"},
+		{event: "create", json: `{"ref":"0000000000000000000000000000000000000000"}`, ref: "0000000000000000000000000000000000000000"},
+		{event: "workflow_dispatch", json: `{"ref":"0000000000000000000000000000000000000000"}`, ref: "0000000000000000000000000000000000000000"},
+		{event: "delete", json: `{"repository":{"default_branch": "main"}}`, ref: "refs/heads/main"},
+		{event: "pull_request", json: `{"number":123}`, ref: "refs/pull/123/merge"},
+		{event: "pull_request_review", json: `{"number":123}`, ref: "refs/pull/123/merge"},
+		{event: "pull_request_review_comment", json: `{"number":123}`, ref: "refs/pull/123/merge"},
+		{event: "pull_request_target", json: `{"pull_request":{"base":{"ref": "main"}}}`, ref: "refs/heads/main"},
+		{event: "deployment", json: `{"deployment": {"ref": "tag-name"}}`, ref: "tag-name"},
+		{event: "deployment_status", json: `{"deployment": {"ref": "tag-name"}}`, ref: "tag-name"},
+		{event: "release", json: `{"release": {"tag_name": "tag-name"}}`, ref: "refs/tags/tag-name"},
+	}
+
+	for _, data := range table {
+		data := data
+		t.Run(data.event, func(t *testing.T) {
+			rc := &RunContext{
+				EventJSON: data.json,
+				Config: &Config{
+					EventName: data.event,
+					Workdir:   "",
+				},
+				Run: &model.Run{
+					Workflow: &model.Workflow{
+						Name: "GitHubContextTest",
+					},
+				},
+			}
+
+			ghc := rc.getGithubContext(context.Background())
+
+			assert.Equal(t, data.ref, ghc.Ref)
+		})
+	}
 }
 
 func createIfTestRunContext(jobs map[string]*model.Job) *RunContext {
@@ -367,7 +456,7 @@ func createIfTestRunContext(jobs map[string]*model.Job) *RunContext {
 			},
 		},
 	}
-	rc.ExprEval = rc.NewExpressionEvaluator()
+	rc.ExprEval = rc.NewExpressionEvaluator(context.Background())
 
 	return rc
 }
@@ -483,4 +572,55 @@ if: always()`, ""),
 	})
 	rc.Run.JobID = "job2"
 	assertObject.True(rc.isEnabled(context.Background()))
+}
+
+func TestRunContextGetEnv(t *testing.T) {
+	tests := []struct {
+		description string
+		rc          *RunContext
+		targetEnv   string
+		want        string
+	}{
+		{
+			description: "Env from Config should overwrite",
+			rc: &RunContext{
+				Config: &Config{
+					Env: map[string]string{"OVERWRITTEN": "true"},
+				},
+				Run: &model.Run{
+					Workflow: &model.Workflow{
+						Jobs: map[string]*model.Job{"test": {Name: "test"}},
+						Env:  map[string]string{"OVERWRITTEN": "false"},
+					},
+					JobID: "test",
+				},
+			},
+			targetEnv: "OVERWRITTEN",
+			want:      "true",
+		},
+		{
+			description: "No overwrite occurs",
+			rc: &RunContext{
+				Config: &Config{
+					Env: map[string]string{"SOME_OTHER_VAR": "true"},
+				},
+				Run: &model.Run{
+					Workflow: &model.Workflow{
+						Jobs: map[string]*model.Job{"test": {Name: "test"}},
+						Env:  map[string]string{"OVERWRITTEN": "false"},
+					},
+					JobID: "test",
+				},
+			},
+			targetEnv: "OVERWRITTEN",
+			want:      "false",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.description, func(t *testing.T) {
+			envMap := test.rc.GetEnv()
+			assert.EqualValues(t, test.want, envMap[test.targetEnv])
+		})
+	}
 }
