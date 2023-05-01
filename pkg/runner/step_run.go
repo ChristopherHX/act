@@ -10,6 +10,7 @@ import (
 
 	"github.com/nektos/act/pkg/common"
 	"github.com/nektos/act/pkg/container"
+	"github.com/nektos/act/pkg/lookpath"
 	"github.com/nektos/act/pkg/model"
 )
 
@@ -144,6 +145,22 @@ func (sr *stepRun) setupShellCommand(ctx context.Context) (name, script string, 
 	return name, script, err
 }
 
+type localEnv struct {
+	env map[string]string
+}
+
+func (l *localEnv) Getenv(name string) string {
+	if runtime.GOOS == "windows" {
+		for k, v := range l.env {
+			if strings.EqualFold(name, k) {
+				return v
+			}
+		}
+		return ""
+	}
+	return l.env[name]
+}
+
 func (sr *stepRun) setupShell(ctx context.Context) {
 	rc := sr.RunContext
 	step := sr.Step
@@ -168,10 +185,23 @@ func (sr *stepRun) setupShell(ctx context.Context) {
 			step.Shell = "sh"
 		}
 	}
-	// Don't use bash on windows by default, if not using a docker container
-	if step.Shell == "" && runtime.GOOS == "windows" {
+	if step.Shell == "" {
 		if _, ok := rc.JobContainer.(*container.HostEnvironment); ok {
-			step.Shell = "powershell"
+			shellWithFallback := []string{"bash", "sh"}
+			// Don't use bash on windows by default, if not using a docker container
+			if runtime.GOOS == "windows" {
+				shellWithFallback = []string{"pwsh", "powershell"}
+			}
+			step.Shell = shellWithFallback[0]
+			lenv := &localEnv{env: map[string]string{}}
+			for k, v := range sr.env {
+				lenv.env[k] = v
+			}
+			sr.getRunContext().ApplyExtraPath(ctx, &lenv.env)
+			_, err := lookpath.LookPath2(shellWithFallback[0], lenv)
+			if err != nil {
+				step.Shell = shellWithFallback[1]
+			}
 		}
 	}
 }
