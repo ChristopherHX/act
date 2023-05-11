@@ -154,7 +154,9 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 				select {
 				case <-cctx.Done():
 					rc.Cancelled = true
+					logger.Infof("Reevaluate condition %v due to cancellation", ifExpression)
 					keepStepRunning, err := isStepEnabled(ctx, ifExpression, step, stage)
+					logger.Infof("Result condition keepStepRunning=%v", keepStepRunning)
 					if !keepStepRunning || err != nil {
 						cancelStepCtx()
 					}
