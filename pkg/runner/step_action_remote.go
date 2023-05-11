@@ -46,15 +46,14 @@ func (sar *stepActionRemote) prepareActionExecutor() common.Executor {
 			return fmt.Errorf("Expected format {org}/{repo}[/path]@ref. Actual '%s' Input string was not in a correct format", sar.Step.Uses)
 		}
 
-		sar.remoteAction.URL = sar.RunContext.Config.GetGitHubServerUrl()
-
 		github := sar.getGithubContext(ctx)
+		sar.remoteAction.URL = github.ServerURL
+
 		if sar.remoteAction.IsCheckout() && isLocalCheckout(github, sar.Step) && !sar.RunContext.Config.NoSkipCheckout {
 			common.Logger(ctx).Debugf("Skipping local actions/checkout because workdir was already copied")
 			return nil
 		}
 
-		sar.remoteAction.URL = sar.RunContext.Config.GetGitHubServerUrl()
 		for _, action := range sar.RunContext.Config.ReplaceGheActionWithGithubCom {
 			if strings.EqualFold(fmt.Sprintf("%s/%s", sar.remoteAction.Org, sar.remoteAction.Repo), action) {
 				sar.remoteAction.URL = "https://github.com"
