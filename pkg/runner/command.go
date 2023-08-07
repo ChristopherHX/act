@@ -36,13 +36,9 @@ func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 	resumeCommand := ""
 	return func(line string) bool {
 		command, kvPairs, arg, ok := tryParseRawActionCommand(line)
-		if !ok {
+		// While commands are disabled log the orignal command
+		if !ok || resumeCommand != "" && command != resumeCommand {
 			return true
-		}
-
-		if resumeCommand != "" && command != resumeCommand {
-			logger.Infof("  \U00002699  %s", line)
-			return false
 		}
 		arg = unescapeCommandData(arg)
 		kvPairs = unescapeKvPairs(kvPairs)
@@ -54,11 +50,11 @@ func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 		case "add-path":
 			rc.addPath(ctx, arg)
 		case "debug":
-			logger.Infof("  \U0001F4AC  %s", line)
+			logger.Debugf("%s", arg)
 		case "warning":
-			logger.Infof("  \U0001F6A7  %s", line)
+			logger.Warnf("%s", arg)
 		case "error":
-			logger.Infof("  \U00002757  %s", line)
+			logger.Errorf("%s", arg)
 		case "add-mask":
 			rc.AddMask(arg)
 			logger.Infof("  \U00002699  %s", "***")
@@ -73,6 +69,10 @@ func (rc *RunContext) commandHandler(ctx context.Context) common.LineHandler {
 			rc.saveState(ctx, kvPairs, arg)
 		case "add-matcher":
 			logger.Infof("  \U00002753 add-matcher %s", arg)
+		case "group":
+			logger.Infof("##[group]%s", arg)
+		case "endgroup":
+			logger.Infof("##[endgroup]%s", arg)
 		default:
 			logger.Infof("  \U00002753  %s", line)
 		}
