@@ -174,6 +174,7 @@ func getHashFilesFunction(rc *RunContext, ctx context.Context) func(v []reflect.
 				if i == 0 {
 					if strings.HasPrefix(s, "--") {
 						if strings.EqualFold(s, "--follow-symbolic-links") {
+							followSymlink = true
 							continue
 						} else {
 							return "", fmt.Errorf("Invalid glob option %s, available option: '--follow-symbolic-links'", s)
