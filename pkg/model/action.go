@@ -19,25 +19,26 @@ func (a *ActionRunsUsing) UnmarshalYAML(unmarshal func(interface{}) error) error
 
 	// Force input to lowercase for case insensitive comparison
 	format := ActionRunsUsing(strings.ToLower(using))
+	if strings.HasPrefix(format, ActionRunsUsingNode) {
+		*a = ActionRunsUsingNode
+		return nil
+	}
 	switch format {
-	case ActionRunsUsingNode16, ActionRunsUsingNode12, ActionRunsUsingDocker, ActionRunsUsingComposite:
+	case ActionRunsUsingDocker, ActionRunsUsingComposite:
 		*a = format
 	default:
 		return fmt.Errorf(fmt.Sprintf("The runs.using key in action.yml must be one of: %v, got %s", []string{
 			ActionRunsUsingComposite,
 			ActionRunsUsingDocker,
-			ActionRunsUsingNode12,
-			ActionRunsUsingNode16,
+			ActionRunsUsingNode,
 		}, format))
 	}
 	return nil
 }
 
 const (
-	// ActionRunsUsingNode12 for running with node12
-	ActionRunsUsingNode12 = "node12"
-	// ActionRunsUsingNode12 for running with node16
-	ActionRunsUsingNode16 = "node16"
+	// ActionRunsUsingNode for running with node16
+	ActionRunsUsingNode = "node"
 	// ActionRunsUsingDocker for running with docker
 	ActionRunsUsingDocker = "docker"
 	// ActionRunsUsingComposite for running composite
