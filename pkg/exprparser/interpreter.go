@@ -164,7 +164,10 @@ func (impl *interperterImpl) evaluateVariable(variableNode *actionlint.VariableN
 				content, _ := json.Marshal(impl.env.Github)
 				_ = json.Unmarshal(content, &out)
 				for k, v := range serverPayload {
-					out[k] = v
+					// skip empty values, because github.workspace was set by Gitea Actions to an empty string
+					if _, ok := out[k]; !ok || v != "" && v != nil {
+						out[k] = v
+					}
 				}
 				return out, nil
 			}
