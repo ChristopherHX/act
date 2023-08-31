@@ -19,7 +19,7 @@ func (a *ActionRunsUsing) UnmarshalYAML(unmarshal func(interface{}) error) error
 
 	// Force input to lowercase for case insensitive comparison
 	format := ActionRunsUsing(strings.ToLower(using))
-	if strings.HasPrefix(format, ActionRunsUsingNode) {
+	if strings.HasPrefix(string(format), string(ActionRunsUsingNode)) {
 		*a = ActionRunsUsingNode
 		return nil
 	}

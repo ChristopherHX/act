@@ -149,7 +149,7 @@ func runActionImpl(step actionStep, actionDir string, remoteAction *remoteAction
 		logger.Debugf("type=%v actionDir=%s actionPath=%s workdir=%s actionCacheDir=%s actionName=%s containerActionDir=%s", stepModel.Type(), actionDir, actionPath, rc.Config.Workdir, rc.ActionCacheDir(), actionName, containerActionDir)
 
 		switch action.Runs.Using {
-		case ActionRunsUsingNode:
+		case model.ActionRunsUsingNode:
 			if err := maybeCopyToActionDir(ctx, step, actionDir, actionPath, containerActionDir); err != nil {
 				return err
 			}
@@ -465,7 +465,7 @@ func runPreStep(step actionStep) common.Executor {
 		action := step.getActionModel()
 
 		switch action.Runs.Using {
-		case ActionRunsUsingNode:
+		case model.ActionRunsUsingNode:
 			// defaults in pre steps were missing, however provided inputs are available
 			populateEnvsFromInput(ctx, step.getEnv(), action, rc)
 			// todo: refactor into step
@@ -579,7 +579,7 @@ func runPostStep(step actionStep) common.Executor {
 		_, containerActionDir := getContainerActionPaths(stepModel, actionLocation, rc)
 
 		switch action.Runs.Using {
-		case ActionRunsUsingNode:
+		case model.ActionRunsUsingNode:
 
 			populateEnvsFromSavedState(step.getEnv(), step, rc)
 
