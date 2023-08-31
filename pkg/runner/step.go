@@ -81,7 +81,7 @@ func runStepExecutor(step step, stage stepStage, executor common.Executor) commo
 			return err
 		}
 
-		cctx := ctx.Value(common.JobCancelCtxVal).(context.Context)
+		cctx, _ := ctx.Value(common.JobCancelCtxVal).(context.Context)
 		rc.Cancelled = cctx != nil && cctx.Err() != nil
 
 		runStep, err := isStepEnabled(ctx, ifExpression, step, stage)
