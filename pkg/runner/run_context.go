@@ -643,10 +643,19 @@ func (rc *RunContext) getGithubContext(ctx context.Context) *model.GithubContext
 	}
 
 	if rc.GHContextData != nil {
-		err := json.Unmarshal([]byte(*rc.GHContextData), ghc)
-		if err == nil {
-			return ghc
+		var out map[string]interface{}
+		var nout map[string]interface{}
+		content, _ := json.Marshal(ghc)
+		_ = json.Unmarshal(content, &out)
+		_ = json.Unmarshal([]byte(*rc.GHContextData), &nout)
+		for k, v := range nout {
+			// gitea sends empty string github contextdata, which replaced github.workspace
+			if v != nil && v != "" {
+				out[k] = v
+			}
 		}
+		content, _ = json.Marshal(out)
+		_ = json.Unmarshal(content, &ghc)
 	}
 
 	if ghc.RunID == "" {
