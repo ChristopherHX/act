@@ -96,17 +96,22 @@ func newJobExecutor(info jobInfo, sf stepFactory, rc *RunContext) common.Executo
 
 	postExecutor = postExecutor.Finally(func(ctx context.Context) error {
 		jobError := common.JobError(ctx)
-		var err error
 		if rc.Config.AutoRemove || jobError == nil {
+			timeout := time.Minute
+			logger := common.Logger(ctx)
+			logger.Infof("Stopping and removing Container... (waiting for %s)", timeout.String())
 			// always allow 1 min for stopping and removing the runner, even if we were cancelled
-			ctx, cancel := context.WithTimeout(common.WithLogger(context.Background(), common.Logger(ctx)), time.Minute)
+			ctx, cancel := context.WithTimeout(common.WithLogger(context.Background(), common.Logger(ctx)), timeout)
 			defer cancel()
-			err = info.stopContainer()(ctx)
+			warn := info.stopContainer()(ctx)
+			if warn != nil {
+				logger.Warnf("Stopping and removing Container failed after %s with error: ", timeout.String(), warn.Error())
+			}
 		}
 		setJobResult(ctx, info, rc, jobError == nil)
 		setJobOutputs(ctx, rc)
 
-		return err
+		return nil
 	})
 
 	pipeline := make([]common.Executor, 0)
