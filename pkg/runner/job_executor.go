@@ -19,6 +19,7 @@ type jobInfo interface {
 	result(result string)
 }
 
+//nolint:contextcheck,gocyclo
 func newJobExecutor(info jobInfo, sf stepFactory, rc *RunContext) common.Executor {
 	steps := make([]common.Executor, 0)
 	preSteps := make([]common.Executor, 0)
@@ -87,7 +88,7 @@ func newJobExecutor(info jobInfo, sf stepFactory, rc *RunContext) common.Executo
 
 		postExec := useStepLogger(rc, stepModel, stepStagePost, step.post())
 		if postExecutor != nil {
-			// run the post exector in reverse order
+			// run the post executor in reverse order
 			postExecutor = postExec.Finally(postExecutor)
 		} else {
 			postExecutor = postExec
@@ -119,7 +120,7 @@ func newJobExecutor(info jobInfo, sf stepFactory, rc *RunContext) common.Executo
 	pipeline = append(pipeline, steps...)
 
 	return common.NewPipelineExecutor(info.startContainer(), common.NewPipelineExecutor(pipeline...).
-		Finally(func(ctx context.Context) error {
+		Finally(func(ctx context.Context) error { //nolint:contextcheck
 			var cancel context.CancelFunc
 			if ctx.Err() == context.Canceled {
 				// in case of an aborted run, we still should execute the

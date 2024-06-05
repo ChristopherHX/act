@@ -14,6 +14,7 @@ import (
 	"github.com/AlecAivazis/survey/v2"
 	"github.com/adrg/xdg"
 	"github.com/andreaskoch/go-fswatch"
+	docker_container "github.com/docker/docker/api/types/container"
 	"github.com/joho/godotenv"
 	gitignore "github.com/sabhiram/go-gitignore"
 	log "github.com/sirupsen/logrus"
@@ -31,7 +32,7 @@ import (
 // Execute is the entry point to running the CLI
 func Execute(ctx context.Context, version string) {
 	input := new(Input)
-	var rootCmd = &cobra.Command{
+	rootCmd := &cobra.Command{
 		Use:               "act [event name to run] [flags]\n\nIf no event name passed, will default to \"on: push\"\nIf actions handles only one event it will be used as default instead of \"on: push\"",
 		Short:             "Run GitHub actions locally by specifying the event name (e.g. `push`) or an action name directly.",
 		Args:              cobra.MaximumNArgs(1),
@@ -49,6 +50,7 @@ func Execute(ctx context.Context, version string) {
 
 	rootCmd.Flags().StringVar(&input.remoteName, "remote-name", "origin", "git remote name that will be used to retrieve url of git repo")
 	rootCmd.Flags().StringArrayVarP(&input.secrets, "secret", "s", []string{}, "secret to make available to actions with optional value (e.g. -s mysecret=foo or -s mysecret)")
+	rootCmd.Flags().StringArrayVar(&input.vars, "var", []string{}, "variable to make available to actions with optional value (e.g. --var myvar=foo or --var myvar)")
 	rootCmd.Flags().StringArrayVarP(&input.envs, "env", "", []string{}, "env to make available to actions with optional value (e.g. --env myenv=foo or --env myenv)")
 	rootCmd.Flags().StringArrayVarP(&input.inputs, "input", "", []string{}, "action input to make available to actions (e.g. --input myinput=foo)")
 	rootCmd.Flags().StringArrayVarP(&input.platforms, "platform", "P", []string{}, "custom image to use per platform (e.g. -P ubuntu-18.04=nektos/act-environments-ubuntu:18.04)")
@@ -74,9 +76,11 @@ func Execute(ctx context.Context, version string) {
 	rootCmd.PersistentFlags().StringVarP(&input.workdir, "directory", "C", ".", "working directory")
 	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&input.jsonLogger, "json", false, "Output logs in json format")
+	rootCmd.PersistentFlags().BoolVar(&input.logPrefixJobID, "log-prefix-job-id", false, "Output the job id within non-json logs instead of the entire name")
 	rootCmd.PersistentFlags().BoolVarP(&input.noOutput, "quiet", "q", false, "disable logging of output from steps")
-	rootCmd.PersistentFlags().BoolVarP(&input.dryrun, "dryrun", "n", false, "dryrun mode")
+	rootCmd.PersistentFlags().BoolVarP(&input.dryrun, "dryrun", "n", false, "disable container creation, validates only workflow correctness")
 	rootCmd.PersistentFlags().StringVarP(&input.secretfile, "secret-file", "", ".secrets", "file with list of secrets to read from (e.g. --secret-file .secrets)")
+	rootCmd.PersistentFlags().StringVarP(&input.varfile, "var-file", "", ".vars", "file with list of vars to read from (e.g. --var-file .vars)")
 	rootCmd.PersistentFlags().BoolVarP(&input.insecureSecrets, "insecure-secrets", "", false, "NOT RECOMMENDED! Doesn't hide secrets while printing logs.")
 	rootCmd.PersistentFlags().StringVarP(&input.envfile, "env-file", "", ".env", "environment file to read and use as env in the containers")
 	rootCmd.PersistentFlags().StringVarP(&input.inputfile, "input-file", "", ".input", "input file to read and use as action input")
@@ -92,6 +96,11 @@ func Execute(ctx context.Context, version string) {
 	rootCmd.PersistentFlags().StringVarP(&input.cacheServerPath, "cache-server-path", "", filepath.Join(CacheHomeDir, "actcache"), "Defines the path where the cache server stores caches.")
 	rootCmd.PersistentFlags().StringVarP(&input.cacheServerAddr, "cache-server-addr", "", common.GetOutboundIP().String(), "Defines the address to which the cache server binds.")
 	rootCmd.PersistentFlags().Uint16VarP(&input.cacheServerPort, "cache-server-port", "", 0, "Defines the port where the artifact server listens. 0 means a randomly available port.")
+	rootCmd.PersistentFlags().StringVarP(&input.actionCachePath, "action-cache-path", "", filepath.Join(CacheHomeDir, "act"), "Defines the path where the actions get cached and host workspaces created.")
+	rootCmd.PersistentFlags().BoolVarP(&input.actionOfflineMode, "action-offline-mode", "", false, "If action contents exists, it will not be fetch and pull again. If turn on this,will turn off force pull")
+	rootCmd.PersistentFlags().StringVarP(&input.networkName, "network", "", "host", "Sets a docker network name. Defaults to host.")
+	rootCmd.PersistentFlags().BoolVarP(&input.useNewActionCache, "use-new-action-cache", "", false, "Enable using the new Action Cache for storing Actions locally")
+	rootCmd.PersistentFlags().StringArrayVarP(&input.localRepository, "local-repository", "", []string{}, "Replaces the specified repository and ref with a local folder (e.g. https://github.com/test/test@v0=/home/act/test or test/test@v0=/home/act/test, the latter matches any hosts or protocols)")
 	rootCmd.SetArgs(args())
 
 	if err := rootCmd.Execute(); err != nil {
@@ -99,50 +108,22 @@ func Execute(ctx context.Context, version string) {
 	}
 }
 
+// Return locations where Act's config can be found in order: XDG spec, .actrc in HOME directory, .actrc in invocation directory
 func configLocations() []string {
 	configFileName := ".actrc"
 
-	// reference: https://specifications.freedesktop.org/basedir-spec/latest/ar01s03.html
-	var actrcXdg string
-	for _, fileName := range []string{"act/actrc", configFileName} {
-		if foundConfig, err := xdg.SearchConfigFile(fileName); foundConfig != "" && err == nil {
-			actrcXdg = foundConfig
-			break
-		}
+	homePath := filepath.Join(UserHomeDir, configFileName)
+	invocationPath := filepath.Join(".", configFileName)
+
+	// Though named xdg, adrg's lib support macOS and Windows config paths as well
+	// It also takes cares of creating the parent folder so we don't need to bother later
+	specPath, err := xdg.ConfigFile("act/actrc")
+	if err != nil {
+		specPath = homePath
 	}
 
-	return []string{
-		filepath.Join(UserHomeDir, configFileName),
-		actrcXdg,
-		filepath.Join(".", configFileName),
-	}
-}
-
-var commonSocketPaths = []string{
-	"/var/run/docker.sock",
-	"/var/run/podman/podman.sock",
-	"$HOME/.colima/docker.sock",
-	"$XDG_RUNTIME_DIR/docker.sock",
-	`\\.\pipe\docker_engine`,
-	"$HOME/.docker/run/docker.sock",
-}
-
-// returns socket path or false if not found any
-func socketLocation() (string, bool) {
-	if dockerHost, exists := os.LookupEnv("DOCKER_HOST"); exists {
-		return dockerHost, true
-	}
-
-	for _, p := range commonSocketPaths {
-		if _, err := os.Lstat(os.ExpandEnv(p)); err == nil {
-			if strings.HasPrefix(p, `\\.\`) {
-				return "npipe://" + filepath.ToSlash(os.ExpandEnv(p)), true
-			}
-			return "unix://" + filepath.ToSlash(os.ExpandEnv(p)), true
-		}
-	}
-
-	return "", false
+	// This order should be enforced since the survey part relies on it
+	return []string{specPath, homePath, invocationPath}
 }
 
 func args() []string {
@@ -177,7 +158,7 @@ func bugReport(ctx context.Context, version string) error {
 
 	report += sprintf("Docker host:", dockerHost)
 	report += fmt.Sprintln("Sockets found:")
-	for _, p := range commonSocketPaths {
+	for _, p := range container.CommonSocketLocations {
 		if _, err := os.Lstat(os.ExpandEnv(p)); err != nil {
 			continue
 		} else if _, err := os.Stat(os.ExpandEnv(p)); err != nil {
@@ -260,7 +241,8 @@ func readArgsFile(file string, split bool) []string {
 	}()
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
-		arg := strings.TrimSpace(scanner.Text())
+		arg := os.ExpandEnv(strings.TrimSpace(scanner.Text()))
+
 		if strings.HasPrefix(arg, "-") && split {
 			args = append(args, regexp.MustCompile(`\s`).Split(arg, 2)...)
 		} else if !split {
@@ -270,7 +252,7 @@ func readArgsFile(file string, split bool) []string {
 	return args
 }
 
-func setup(inputs *Input) func(*cobra.Command, []string) {
+func setup(_ *Input) func(*cobra.Command, []string) {
 	return func(cmd *cobra.Command, _ []string) {
 		verbose, _ := cmd.Flags().GetBool("verbose")
 		if verbose {
@@ -286,19 +268,17 @@ func cleanup(inputs *Input) func(*cobra.Command, []string) {
 	}
 }
 
-func parseEnvs(env []string, envs map[string]string) bool {
-	if env != nil {
-		for _, envVar := range env {
-			e := strings.SplitN(envVar, `=`, 2)
-			if len(e) == 2 {
-				envs[e[0]] = e[1]
-			} else {
-				envs[e[0]] = ""
-			}
+func parseEnvs(env []string) map[string]string {
+	envs := make(map[string]string, len(env))
+	for _, envVar := range env {
+		e := strings.SplitN(envVar, `=`, 2)
+		if len(e) == 2 {
+			envs[e[0]] = e[1]
+		} else {
+			envs[e[0]] = ""
 		}
-		return true
 	}
-	return false
+	return envs
 }
 
 func readYamlFile(file string) (map[string]string, error) {
@@ -325,7 +305,9 @@ func readEnvs(path string, envs map[string]string) bool {
 			log.Fatalf("Error loading from %s: %v", path, err)
 		}
 		for k, v := range env {
-			envs[k] = v
+			if _, ok := envs[k]; !ok {
+				envs[k] = v
+			}
 		}
 		return true
 	}
@@ -340,26 +322,13 @@ func parseMatrix(matrix []string) map[string]map[string]bool {
 		matrix := r.Split(m, 2)
 		if len(matrix) < 2 {
 			log.Fatalf("Invalid matrix format. Failed to parse %s", m)
-		} else {
-			if _, ok := matrixes[matrix[0]]; !ok {
-				matrixes[matrix[0]] = make(map[string]bool)
-			}
-			matrixes[matrix[0]][matrix[1]] = true
 		}
+		if _, ok := matrixes[matrix[0]]; !ok {
+			matrixes[matrix[0]] = make(map[string]bool)
+		}
+		matrixes[matrix[0]][matrix[1]] = true
 	}
 	return matrixes
-}
-
-func isDockerHostURI(daemonPath string) bool {
-	if protoIndex := strings.Index(daemonPath, "://"); protoIndex != -1 {
-		scheme := daemonPath[:protoIndex]
-		if strings.IndexFunc(scheme, func(r rune) bool {
-			return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z')
-		}) == -1 {
-			return true
-		}
-	}
-	return false
 }
 
 //nolint:gocyclo
@@ -372,27 +341,12 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 		if ok, _ := cmd.Flags().GetBool("bug-report"); ok {
 			return bugReport(ctx, cmd.Version)
 		}
-
-		// Prefer DOCKER_HOST, don't override it
-		socketPath, hasDockerHost := os.LookupEnv("DOCKER_HOST")
-		if !hasDockerHost {
-			// a - in containerDaemonSocket means don't mount, preserve this value
-			// otherwise if input.containerDaemonSocket is a filepath don't use it as socketPath
-			skipMount := input.containerDaemonSocket == "-" || !isDockerHostURI(input.containerDaemonSocket)
-			if input.containerDaemonSocket != "" && !skipMount {
-				socketPath = input.containerDaemonSocket
-			} else {
-				socket, found := socketLocation()
-				if !found {
-					log.Errorln("daemon Docker Engine socket not found and containerDaemonSocket option was not set")
-				} else {
-					socketPath = socket
-				}
-				if !skipMount {
-					input.containerDaemonSocket = socketPath
-				}
-			}
-			os.Setenv("DOCKER_HOST", socketPath)
+		if ret, err := container.GetSocketAndHost(input.containerDaemonSocket); err != nil {
+			log.Warnf("Couldn't get a valid docker connection: %+v", err)
+		} else {
+			os.Setenv("DOCKER_HOST", ret.Host)
+			input.containerDaemonSocket = ret.Socket
+			log.Infof("Using docker host '%s', and daemon socket '%s'", ret.Host, ret.Socket)
 		}
 
 		if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" && input.containerArchitecture == "" {
@@ -405,18 +359,20 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 		}
 
 		log.Debugf("Loading environment from %s", input.Envfile())
-		envs := make(map[string]string)
-		_ = parseEnvs(input.envs, envs)
+		envs := parseEnvs(input.envs)
 		_ = readEnvs(input.Envfile(), envs)
 
 		log.Debugf("Loading action inputs from %s", input.Inputfile())
-		inputs := make(map[string]string)
-		_ = parseEnvs(input.inputs, inputs)
+		inputs := parseEnvs(input.inputs)
 		_ = readEnvs(input.Inputfile(), inputs)
 
 		log.Debugf("Loading secrets from %s", input.Secretfile())
 		secrets := newSecrets(input.secrets)
 		_ = readEnvs(input.Secretfile(), secrets)
+
+		log.Debugf("Loading vars from %s", input.Varfile())
+		vars := newSecrets(input.vars)
+		_ = readEnvs(input.Varfile(), vars)
 
 		matrixes := parseMatrix(input.matrix)
 		log.Debugf("Evaluated matrix inclusions: %v", matrixes)
@@ -523,6 +479,11 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 			log.Debugf("Planning jobs for event: %s", eventName)
 			plan, plannerErr = planner.PlanEvent(eventName)
 		}
+		if plan != nil {
+			if len(plan.Stages) == 0 {
+				plannerErr = fmt.Errorf("Could not find any stages to run. View the valid jobs with `act --list`. Use `act --help` to find how to filter by Job ID/Workflow/Event Name")
+			}
+		}
 		if plan == nil && plannerErr != nil {
 			return plannerErr
 		}
@@ -544,6 +505,7 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 				}
 			}
 			if !cfgFound && len(cfgLocations) > 0 {
+				// The first config location refers to the global config folder one
 				if err := defaultImageSurvey(cfgLocations[0]); err != nil {
 					log.Fatal(err)
 				}
@@ -570,15 +532,19 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 			EventName:                          eventName,
 			EventPath:                          input.EventPath(),
 			DefaultBranch:                      defaultbranch,
-			ForcePull:                          input.forcePull,
+			ForcePull:                          !input.actionOfflineMode && input.forcePull,
 			ForceRebuild:                       input.forceRebuild,
 			ReuseContainers:                    input.reuseContainers,
 			Workdir:                            input.Workdir(),
+			ActionCacheDir:                     input.actionCachePath,
+			ActionOfflineMode:                  input.actionOfflineMode,
 			BindWorkdir:                        input.bindWorkdir,
 			LogOutput:                          !input.noOutput,
 			JSONLogger:                         input.jsonLogger,
+			LogPrefixJobID:                     input.logPrefixJobID,
 			Env:                                envs,
 			Secrets:                            secrets,
+			Vars:                               vars,
 			Inputs:                             inputs,
 			Token:                              secrets["GITHUB_TOKEN"],
 			InsecureSecrets:                    input.insecureSecrets,
@@ -601,6 +567,32 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 			ReplaceGheActionWithGithubCom:      input.replaceGheActionWithGithubCom,
 			ReplaceGheActionTokenWithGithubCom: input.replaceGheActionTokenWithGithubCom,
 			Matrix:                             matrixes,
+			ContainerNetworkMode:               docker_container.NetworkMode(input.networkName),
+		}
+		if input.useNewActionCache || len(input.localRepository) > 0 {
+			if input.actionOfflineMode {
+				config.ActionCache = &runner.GoGitActionCacheOfflineMode{
+					Parent: runner.GoGitActionCache{
+						Path: config.ActionCacheDir,
+					},
+				}
+			} else {
+				config.ActionCache = &runner.GoGitActionCache{
+					Path: config.ActionCacheDir,
+				}
+			}
+			if len(input.localRepository) > 0 {
+				localRepositories := map[string]string{}
+				for _, l := range input.localRepository {
+					k, v, _ := strings.Cut(l, "=")
+					localRepositories[k] = v
+				}
+				config.ActionCache = &runner.LocalRepositoryCache{
+					Parent:            config.ActionCache,
+					LocalRepositories: localRepositories,
+					CacheDirCache:     map[string]string{},
+				}
+			}
 		}
 		r, err := runner.New(config)
 		if err != nil {
@@ -647,7 +639,7 @@ func newRunCommand(ctx context.Context, input *Input) func(*cobra.Command, []str
 func defaultImageSurvey(actrc string) error {
 	var answer string
 	confirmation := &survey.Select{
-		Message: "Please choose the default image you want to use with act:\n\n  - Large size image: +20GB Docker image, includes almost all tools used on GitHub Actions (IMPORTANT: currently only ubuntu-18.04 platform is available)\n  - Medium size image: ~500MB, includes only necessary tools to bootstrap actions and aims to be compatible with all actions\n  - Micro size image: <200MB, contains only NodeJS required to bootstrap actions, doesn't work with all actions\n\nDefault image and other options can be changed manually in ~/.actrc (please refer to https://github.com/nektos/act#configuration for additional information about file structure)",
+		Message: "Please choose the default image you want to use with act:\n  - Large size image: ca. 17GB download + 53.1GB storage, you will need 75GB of free disk space, snapshots of GitHub Hosted Runners without snap and pulled docker images\n  - Medium size image: ~500MB, includes only necessary tools to bootstrap actions and aims to be compatible with most actions\n  - Micro size image: <200MB, contains only NodeJS required to bootstrap actions, doesn't work with all actions\n\nDefault image and other options can be changed manually in ~/.actrc (please refer to https://github.com/nektos/act#configuration for additional information about file structure)",
 		Help:    "If you want to know why act asks you that, please go to https://github.com/nektos/act/issues/107",
 		Default: "Medium",
 		Options: []string{"Large", "Medium", "Micro"},
@@ -661,7 +653,7 @@ func defaultImageSurvey(actrc string) error {
 	var option string
 	switch answer {
 	case "Large":
-		option = "-P ubuntu-latest=catthehacker/ubuntu:full-latest\n-P ubuntu-latest=catthehacker/ubuntu:full-20.04\n-P ubuntu-18.04=catthehacker/ubuntu:full-18.04\n"
+		option = "-P ubuntu-latest=catthehacker/ubuntu:full-latest\n-P ubuntu-22.04=catthehacker/ubuntu:full-22.04\n-P ubuntu-20.04=catthehacker/ubuntu:full-20.04\n-P ubuntu-18.04=catthehacker/ubuntu:full-18.04\n"
 	case "Medium":
 		option = "-P ubuntu-latest=catthehacker/ubuntu:act-latest\n-P ubuntu-22.04=catthehacker/ubuntu:act-22.04\n-P ubuntu-20.04=catthehacker/ubuntu:act-20.04\n-P ubuntu-18.04=catthehacker/ubuntu:act-18.04\n"
 	case "Micro":

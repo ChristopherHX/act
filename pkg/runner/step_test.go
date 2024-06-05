@@ -210,6 +210,7 @@ func TestSetupEnv(t *testing.T) {
 		JobContainer: cm,
 	}
 	step := &model.Step{
+		Uses: "./",
 		With: map[string]string{
 			"STEP_WITH": "with-value",
 		},
@@ -253,7 +254,6 @@ func TestSetupEnv(t *testing.T) {
 		"GITHUB_RUN_ID":            "runId",
 		"GITHUB_RUN_NUMBER":        "1",
 		"GITHUB_SERVER_URL":        "https://",
-		"GITHUB_TOKEN":             "",
 		"GITHUB_WORKFLOW":          "",
 		"INPUT_STEP_WITH":          "with-value",
 		"RC_KEY":                   "rcvalue",
@@ -385,7 +385,7 @@ func TestIsContinueOnError(t *testing.T) {
 	assertObject.False(continueOnError)
 	assertObject.Nil(err)
 
-	// explcit true
+	// explicit true
 	step = createTestStep(t, "continue-on-error: true")
 	continueOnError, err = isContinueOnError(context.Background(), step.getStepModel().RawContinueOnError, step, stepStageMain)
 	assertObject.True(continueOnError)

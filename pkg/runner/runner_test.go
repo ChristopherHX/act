@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/joho/godotenv"
 	log "github.com/sirupsen/logrus"
 	assert "github.com/stretchr/testify/assert"
+	"gopkg.in/yaml.v3"
 
 	"github.com/nektos/act/pkg/common"
 	"github.com/nektos/act/pkg/model"
@@ -187,6 +189,7 @@ func (j *TestJobFileInfo) runTest(ctx context.Context, t *testing.T, cfg *Config
 		GitHubInstance:        "github.com",
 		ContainerArchitecture: cfg.ContainerArchitecture,
 		Matrix:                cfg.Matrix,
+		ActionCache:           cfg.ActionCache,
 	}
 
 	runner, err := New(runnerConfig)
@@ -207,6 +210,10 @@ func (j *TestJobFileInfo) runTest(ctx context.Context, t *testing.T, cfg *Config
 	}
 
 	fmt.Println("::endgroup::")
+}
+
+type TestConfig struct {
+	LocalRepositories map[string]string `yaml:"local-repositories"`
 }
 
 func TestRunEvent(t *testing.T) {
@@ -235,8 +242,11 @@ func TestRunEvent(t *testing.T) {
 		// Uses
 		{workdir, "uses-composite", "push", "", platforms, secrets},
 		{workdir, "uses-composite-with-error", "push", "Job 'failing-composite-action' failed", platforms, secrets},
+		{workdir, "uses-composite-check-for-input-collision", "push", "", platforms, secrets},
+		{workdir, "uses-composite-check-for-input-shadowing", "push", "", platforms, secrets},
 		{workdir, "uses-nested-composite", "push", "", platforms, secrets},
 		{workdir, "remote-action-composite-js-pre-with-defaults", "push", "", platforms, secrets},
+		{workdir, "remote-action-composite-action-ref", "push", "", platforms, secrets},
 		{workdir, "uses-workflow", "push", "", platforms, map[string]string{"secret": "keep_it_private"}},
 		{workdir, "uses-workflow", "pull_request", "", platforms, map[string]string{"secret": "keep_it_private"}},
 		{workdir, "uses-docker-url", "push", "", platforms, secrets},
@@ -288,6 +298,7 @@ func TestRunEvent(t *testing.T) {
 		{workdir, "docker-action-custom-path", "push", "", platforms, secrets},
 		{workdir, "GITHUB_ENV-use-in-env-ctx", "push", "", platforms, secrets},
 		{workdir, "ensure-post-steps", "push", "Job 'second-post-step-should-fail' failed", platforms, secrets},
+		{workdir, "workflow_call_inputs", "workflow_call", "", platforms, secrets},
 		{workdir, "workflow_dispatch", "workflow_dispatch", "", platforms, secrets},
 		{workdir, "workflow_dispatch_no_inputs_mapping", "workflow_dispatch", "", platforms, secrets},
 		{workdir, "workflow_dispatch-scalar", "workflow_dispatch", "", platforms, secrets},
@@ -300,6 +311,14 @@ func TestRunEvent(t *testing.T) {
 		{workdir, "set-env-step-env-override", "push", "", platforms, secrets},
 		{workdir, "set-env-new-env-file-per-step", "push", "", platforms, secrets},
 		{workdir, "no-panic-on-invalid-composite-action", "push", "jobs failed due to invalid action", platforms, secrets},
+
+		// services
+		{workdir, "services", "push", "", platforms, secrets},
+		{workdir, "services-host-network", "push", "", platforms, secrets},
+		{workdir, "services-with-container", "push", "", platforms, secrets},
+
+		// local remote action overrides
+		{workdir, "local-remote-action-overrides", "push", "", platforms, secrets},
 	}
 
 	for _, table := range tables {
@@ -311,6 +330,22 @@ func TestRunEvent(t *testing.T) {
 			eventFile := filepath.Join(workdir, table.workflowPath, "event.json")
 			if _, err := os.Stat(eventFile); err == nil {
 				config.EventPath = eventFile
+			}
+
+			testConfigFile := filepath.Join(workdir, table.workflowPath, "config.yml")
+			if file, err := os.ReadFile(testConfigFile); err == nil {
+				testConfig := &TestConfig{}
+				if yaml.Unmarshal(file, testConfig) == nil {
+					if testConfig.LocalRepositories != nil {
+						config.ActionCache = &LocalRepositoryCache{
+							Parent: GoGitActionCache{
+								path.Clean(path.Join(workdir, "cache")),
+							},
+							LocalRepositories: testConfig.LocalRepositories,
+							CacheDirCache:     map[string]string{},
+						}
+					}
+				}
 			}
 
 			table.runTest(ctx, t, config)
@@ -389,6 +424,7 @@ func TestRunEventHostEnvironment(t *testing.T) {
 		tables = append(tables, []TestJobFileInfo{
 			{workdir, "windows-prepend-path", "push", "", platforms, secrets},
 			{workdir, "windows-add-env", "push", "", platforms, secrets},
+			{workdir, "windows-shell-cmd", "push", "", platforms, secrets},
 		}...)
 	} else {
 		platforms := map[string]string{

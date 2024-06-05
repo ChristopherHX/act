@@ -84,12 +84,13 @@ func (rc *RunContext) NewExpressionEvaluatorWithEnv(ctx context.Context, env map
 		// but required to interpolate/evaluate the step outputs on the job
 		Steps:       rc.getStepsContext(),
 		Secrets:     getWorkflowSecrets(ctx, rc),
+		Vars:        getWorkflowVars(ctx, rc),
 		Strategy:    strategy,
 		Matrix:      rc.Matrix,
 		Needs:       using,
 		Inputs:      inputs,
 		ContextData: rc.ContextData,
-		Hashfiles:   getHashFilesFunction(rc, ctx),
+		HashFiles:   getHashFilesFunction(ctx, rc),
 	}
 	if rc.JobContainer != nil {
 		ee.Runner = rc.JobContainer.GetRunnerContext(ctx)
@@ -106,7 +107,7 @@ func (rc *RunContext) NewExpressionEvaluatorWithEnv(ctx context.Context, env map
 //go:embed hashfiles/index.js
 var hashfiles string
 
-// NewExpressionEvaluator creates a new evaluator
+// NewStepExpressionEvaluator creates a new evaluator
 func (rc *RunContext) NewStepExpressionEvaluator(ctx context.Context, step step) ExpressionEvaluator {
 	// todo: cleanup EvaluationEnvironment creation
 	job := rc.Run.Job()
@@ -136,6 +137,7 @@ func (rc *RunContext) NewStepExpressionEvaluator(ctx context.Context, step step)
 		Job:      rc.getJobContext(),
 		Steps:    rc.getStepsContext(),
 		Secrets:  getWorkflowSecrets(ctx, rc),
+		Vars:     getWorkflowVars(ctx, rc),
 		Strategy: strategy,
 		Matrix:   rc.Matrix,
 		Needs:    using,
@@ -143,7 +145,7 @@ func (rc *RunContext) NewStepExpressionEvaluator(ctx context.Context, step step)
 		// but required to interpolate/evaluate the inputs in actions/composite
 		Inputs:      inputs,
 		ContextData: rc.ContextData,
-		Hashfiles:   getHashFilesFunction(rc, ctx),
+		HashFiles:   getHashFilesFunction(ctx, rc),
 	}
 	if rc.JobContainer != nil {
 		ee.Runner = rc.JobContainer.GetRunnerContext(ctx)
@@ -158,7 +160,7 @@ func (rc *RunContext) NewStepExpressionEvaluator(ctx context.Context, step step)
 	}
 }
 
-func getHashFilesFunction(rc *RunContext, ctx context.Context) func(v []reflect.Value) (interface{}, error) {
+func getHashFilesFunction(ctx context.Context, rc *RunContext) func(v []reflect.Value) (interface{}, error) {
 	hashFiles := func(v []reflect.Value) (interface{}, error) {
 		if rc.JobContainer != nil {
 			timeed, cancel := context.WithTimeout(ctx, time.Minute)
@@ -176,9 +178,8 @@ func getHashFilesFunction(rc *RunContext, ctx context.Context) func(v []reflect.
 						if strings.EqualFold(s, "--follow-symbolic-links") {
 							followSymlink = true
 							continue
-						} else {
-							return "", fmt.Errorf("Invalid glob option %s, available option: '--follow-symbolic-links'", s)
 						}
+						return "", fmt.Errorf("Invalid glob option %s, available option: '--follow-symbolic-links'", s)
 					}
 				}
 				patterns = append(patterns, s)
@@ -193,7 +194,7 @@ func getHashFilesFunction(rc *RunContext, ctx context.Context) func(v []reflect.
 			}
 
 			stdout, stderr := rc.JobContainer.ReplaceLogWriter(hout, herr)
-			rc.JobContainer.Copy(rc.JobContainer.GetActPath(), &container.FileEntry{
+			_ = rc.JobContainer.Copy(rc.JobContainer.GetActPath(), &container.FileEntry{
 				Name: name,
 				Mode: 0o644,
 				Body: hashfiles,
@@ -256,7 +257,7 @@ func (ee expressionEvaluator) evaluateScalarYamlNode(ctx context.Context, node *
 }
 
 func (ee expressionEvaluator) evaluateMappingYamlNode(ctx context.Context, node *yaml.Node) (*yaml.Node, error) {
-	var ret *yaml.Node = nil
+	var ret *yaml.Node
 	// GitHub has this undocumented feature to merge maps, called insert directive
 	insertDirective := regexp.MustCompile(`\${{\s*insert\s*}}`)
 	for i := 0; i < len(node.Content)/2; i++ {
@@ -314,7 +315,7 @@ func (ee expressionEvaluator) evaluateMappingYamlNode(ctx context.Context, node 
 }
 
 func (ee expressionEvaluator) evaluateSequenceYamlNode(ctx context.Context, node *yaml.Node) (*yaml.Node, error) {
-	var ret *yaml.Node = nil
+	var ret *yaml.Node
 	for i := 0; i < len(node.Content); i++ {
 		v := node.Content[i]
 		// Preserve nested sequences
@@ -472,6 +473,7 @@ func rewriteSubExpression(ctx context.Context, in string, forceFormat bool) (str
 	return out, nil
 }
 
+//nolint:gocyclo
 func getEvaluatorInputs(ctx context.Context, rc *RunContext, step step, ghc *model.GithubContext) map[string]interface{} {
 	inputs := map[string]interface{}{}
 
@@ -507,6 +509,22 @@ func getEvaluatorInputs(ctx context.Context, rc *RunContext, step step, ghc *mod
 		}
 	}
 
+	if ghc.EventName == "workflow_call" {
+		config := rc.Run.Workflow.WorkflowCallConfig()
+		if config != nil && config.Inputs != nil {
+			for k, v := range config.Inputs {
+				value := nestedMapLookup(ghc.Event, "inputs", k)
+				if value == nil {
+					v.Default.Decode(&value)
+				}
+				if v.Type == "boolean" {
+					inputs[k] = value == "true"
+				} else {
+					inputs[k] = value
+				}
+			}
+		}
+	}
 	return inputs
 }
 
@@ -516,21 +534,24 @@ func setupWorkflowInputs(ctx context.Context, inputs *map[string]interface{}, rc
 
 		for name, input := range config.Inputs {
 			value := rc.caller.runContext.Run.Job().With[name]
+
 			if value != nil {
-				if str, ok := value.(string); ok {
+				node := yaml.Node{}
+				_ = node.Encode(value)
+				if rc.caller.runContext.ExprEval != nil {
 					// evaluate using the calling RunContext (outside)
-					value = rc.caller.runContext.ExprEval.Interpolate(ctx, str)
+					_ = rc.caller.runContext.ExprEval.EvaluateYamlNode(ctx, &node)
 				}
+				_ = node.Decode(&value)
 			}
 
 			if value == nil && config != nil && config.Inputs != nil {
-				value = input.Default
+				def := input.Default
 				if rc.ExprEval != nil {
-					if str, ok := value.(string); ok {
-						// evaluate using the called RunContext (inside)
-						value = rc.ExprEval.Interpolate(ctx, str)
-					}
+					// evaluate using the called RunContext (inside)
+					_ = rc.ExprEval.EvaluateYamlNode(ctx, &def)
 				}
+				_ = def.Decode(&value)
 			}
 
 			(*inputs)[name] = value
@@ -559,4 +580,8 @@ func getWorkflowSecrets(ctx context.Context, rc *RunContext) map[string]string {
 	}
 
 	return rc.Config.Secrets
+}
+
+func getWorkflowVars(_ context.Context, rc *RunContext) map[string]string {
+	return rc.Config.Vars
 }

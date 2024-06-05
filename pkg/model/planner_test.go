@@ -39,3 +39,20 @@ func TestPlanner(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkflow(t *testing.T) {
+	log.SetLevel(log.DebugLevel)
+
+	workflow := Workflow{
+		Jobs: map[string]*Job{
+			"valid_job": {
+				Name: "valid_job",
+			},
+		},
+	}
+
+	// Check that a valid job id returns non-error
+	result, err := createStages(&workflow, "valid_job")
+	assert.Nil(t, err)
+	assert.NotNil(t, result)
+}

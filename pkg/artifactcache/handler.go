@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -27,14 +28,14 @@ const (
 )
 
 type Handler struct {
-	db       *bolthold.Store
+	dir      string
 	storage  *Storage
 	router   *httprouter.Router
 	listener net.Listener
 	server   *http.Server
 	logger   logrus.FieldLogger
 
-	gcing int32 // TODO: use atomic.Bool when we can use Go 1.19
+	gcing atomic.Bool
 	gcAt  time.Time
 
 	outboundIP string
@@ -62,19 +63,7 @@ func StartHandler(dir, outboundIP string, port uint16, logger logrus.FieldLogger
 		return nil, err
 	}
 
-	db, err := bolthold.Open(filepath.Join(dir, "bolt.db"), 0o644, &bolthold.Options{
-		Encoder: json.Marshal,
-		Decoder: json.Unmarshal,
-		Options: &bbolt.Options{
-			Timeout:      5 * time.Second,
-			NoGrowSync:   bbolt.DefaultOptions.NoGrowSync,
-			FreelistType: bbolt.DefaultOptions.FreelistType,
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	h.db = db
+	h.dir = dir
 
 	storage, err := NewStorage(filepath.Join(dir, "cache"))
 	if err != nil {
@@ -150,14 +139,19 @@ func (h *Handler) Close() error {
 		}
 		h.listener = nil
 	}
-	if h.db != nil {
-		err := h.db.Close()
-		if err != nil {
-			retErr = err
-		}
-		h.db = nil
-	}
 	return retErr
+}
+
+func (h *Handler) openDB() (*bolthold.Store, error) {
+	return bolthold.Open(filepath.Join(h.dir, "bolt.db"), 0o644, &bolthold.Options{
+		Encoder: json.Marshal,
+		Decoder: json.Unmarshal,
+		Options: &bbolt.Options{
+			Timeout:      5 * time.Second,
+			NoGrowSync:   bbolt.DefaultOptions.NoGrowSync,
+			FreelistType: bbolt.DefaultOptions.FreelistType,
+		},
+	})
 }
 
 // GET /_apis/artifactcache/cache
@@ -169,7 +163,14 @@ func (h *Handler) find(w http.ResponseWriter, r *http.Request, _ httprouter.Para
 	}
 	version := r.URL.Query().Get("version")
 
-	cache, err := h.findCache(keys, version)
+	db, err := h.openDB()
+	if err != nil {
+		h.responseJSON(w, r, 500, err)
+		return
+	}
+	defer db.Close()
+
+	cache, err := findCache(db, keys, version)
 	if err != nil {
 		h.responseJSON(w, r, 500, err)
 		return
@@ -183,7 +184,7 @@ func (h *Handler) find(w http.ResponseWriter, r *http.Request, _ httprouter.Para
 		h.responseJSON(w, r, 500, err)
 		return
 	} else if !ok {
-		_ = h.db.Delete(cache.ID, cache)
+		_ = db.Delete(cache.ID, cache)
 		h.responseJSON(w, r, 204)
 		return
 	}
@@ -205,26 +206,17 @@ func (h *Handler) reserve(w http.ResponseWriter, r *http.Request, _ httprouter.P
 	api.Key = strings.ToLower(api.Key)
 
 	cache := api.ToCache()
-	cache.FillKeyVersionHash()
-	if err := h.db.FindOne(cache, bolthold.Where("KeyVersionHash").Eq(cache.KeyVersionHash)); err != nil {
-		if !errors.Is(err, bolthold.ErrNotFound) {
-			h.responseJSON(w, r, 500, err)
-			return
-		}
-	} else {
-		h.responseJSON(w, r, 400, fmt.Errorf("already exist"))
+	db, err := h.openDB()
+	if err != nil {
+		h.responseJSON(w, r, 500, err)
 		return
 	}
+	defer db.Close()
 
 	now := time.Now().Unix()
 	cache.CreatedAt = now
 	cache.UsedAt = now
-	if err := h.db.Insert(bolthold.NextSequence(), cache); err != nil {
-		h.responseJSON(w, r, 500, err)
-		return
-	}
-	// write back id to db
-	if err := h.db.Update(cache.ID, cache); err != nil {
+	if err := insertCache(db, cache); err != nil {
 		h.responseJSON(w, r, 500, err)
 		return
 	}
@@ -242,7 +234,13 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, params httprout
 	}
 
 	cache := &Cache{}
-	if err := h.db.Get(id, cache); err != nil {
+	db, err := h.openDB()
+	if err != nil {
+		h.responseJSON(w, r, 500, err)
+		return
+	}
+	defer db.Close()
+	if err := db.Get(id, cache); err != nil {
 		if errors.Is(err, bolthold.ErrNotFound) {
 			h.responseJSON(w, r, 400, fmt.Errorf("cache %d: not reserved", id))
 			return
@@ -255,6 +253,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request, params httprout
 		h.responseJSON(w, r, 400, fmt.Errorf("cache %v %q: already complete", cache.ID, cache.Key))
 		return
 	}
+	db.Close()
 	start, _, err := parseContentRange(r.Header.Get("Content-Range"))
 	if err != nil {
 		h.responseJSON(w, r, 400, err)
@@ -276,7 +275,13 @@ func (h *Handler) commit(w http.ResponseWriter, r *http.Request, params httprout
 	}
 
 	cache := &Cache{}
-	if err := h.db.Get(id, cache); err != nil {
+	db, err := h.openDB()
+	if err != nil {
+		h.responseJSON(w, r, 500, err)
+		return
+	}
+	defer db.Close()
+	if err := db.Get(id, cache); err != nil {
 		if errors.Is(err, bolthold.ErrNotFound) {
 			h.responseJSON(w, r, 400, fmt.Errorf("cache %d: not reserved", id))
 			return
@@ -290,13 +295,25 @@ func (h *Handler) commit(w http.ResponseWriter, r *http.Request, params httprout
 		return
 	}
 
-	if err := h.storage.Commit(cache.ID, cache.Size); err != nil {
+	db.Close()
+
+	size, err := h.storage.Commit(cache.ID, cache.Size)
+	if err != nil {
 		h.responseJSON(w, r, 500, err)
 		return
 	}
+	// write real size back to cache, it may be different from the current value when the request doesn't specify it.
+	cache.Size = size
+
+	db, err = h.openDB()
+	if err != nil {
+		h.responseJSON(w, r, 500, err)
+		return
+	}
+	defer db.Close()
 
 	cache.Complete = true
-	if err := h.db.Update(cache.ID, cache); err != nil {
+	if err := db.Update(cache.ID, cache); err != nil {
 		h.responseJSON(w, r, 500, err)
 		return
 	}
@@ -332,68 +349,80 @@ func (h *Handler) middleware(handler httprouter.Handle) httprouter.Handle {
 }
 
 // if not found, return (nil, nil) instead of an error.
-func (h *Handler) findCache(keys []string, version string) (*Cache, error) {
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	key := keys[0] // the first key is for exact match.
-
-	cache := &Cache{
-		Key:     key,
-		Version: version,
-	}
-	cache.FillKeyVersionHash()
-
-	if err := h.db.FindOne(cache, bolthold.Where("KeyVersionHash").Eq(cache.KeyVersionHash)); err != nil {
-		if !errors.Is(err, bolthold.ErrNotFound) {
-			return nil, err
-		}
-	} else if cache.Complete {
-		return cache, nil
-	}
-	stop := fmt.Errorf("stop")
-
-	for _, prefix := range keys[1:] {
-		found := false
-		if err := h.db.ForEach(bolthold.Where("Key").Ge(prefix).And("Version").Eq(version).SortBy("Key"), func(v *Cache) error {
-			if !strings.HasPrefix(v.Key, prefix) {
-				return stop
+func findCache(db *bolthold.Store, keys []string, version string) (*Cache, error) {
+	cache := &Cache{}
+	for _, prefix := range keys {
+		// if a key in the list matches exactly, don't return partial matches
+		if err := db.FindOne(cache,
+			bolthold.Where("Key").Eq(prefix).
+				And("Version").Eq(version).
+				And("Complete").Eq(true).
+				SortBy("CreatedAt").Reverse()); err == nil || !errors.Is(err, bolthold.ErrNotFound) {
+			if err != nil {
+				return nil, fmt.Errorf("find cache: %w", err)
 			}
-			if v.Complete {
-				cache = v
-				found = true
-				return stop
-			}
-			return nil
-		}); err != nil {
-			if !errors.Is(err, stop) {
-				return nil, err
-			}
-		}
-		if found {
 			return cache, nil
 		}
+		prefixPattern := fmt.Sprintf("^%s", regexp.QuoteMeta(prefix))
+		re, err := regexp.Compile(prefixPattern)
+		if err != nil {
+			continue
+		}
+		if err := db.FindOne(cache,
+			bolthold.Where("Key").RegExp(re).
+				And("Version").Eq(version).
+				And("Complete").Eq(true).
+				SortBy("CreatedAt").Reverse()); err != nil {
+			if errors.Is(err, bolthold.ErrNotFound) {
+				continue
+			}
+			return nil, fmt.Errorf("find cache: %w", err)
+		}
+		return cache, nil
 	}
 	return nil, nil
 }
 
+func insertCache(db *bolthold.Store, cache *Cache) error {
+	if err := db.Insert(bolthold.NextSequence(), cache); err != nil {
+		return fmt.Errorf("insert cache: %w", err)
+	}
+	// write back id to db
+	if err := db.Update(cache.ID, cache); err != nil {
+		return fmt.Errorf("write back id to db: %w", err)
+	}
+	return nil
+}
+
 func (h *Handler) useCache(id int64) {
+	db, err := h.openDB()
+	if err != nil {
+		return
+	}
+	defer db.Close()
 	cache := &Cache{}
-	if err := h.db.Get(id, cache); err != nil {
+	if err := db.Get(id, cache); err != nil {
 		return
 	}
 	cache.UsedAt = time.Now().Unix()
-	_ = h.db.Update(cache.ID, cache)
+	_ = db.Update(cache.ID, cache)
 }
 
+const (
+	keepUsed   = 30 * 24 * time.Hour
+	keepUnused = 7 * 24 * time.Hour
+	keepTemp   = 5 * time.Minute
+	keepOld    = 5 * time.Minute
+)
+
 func (h *Handler) gcCache() {
-	if atomic.LoadInt32(&h.gcing) != 0 {
+	if h.gcing.Load() {
 		return
 	}
-	if !atomic.CompareAndSwapInt32(&h.gcing, 0, 1) {
+	if !h.gcing.CompareAndSwap(false, true) {
 		return
 	}
-	defer atomic.StoreInt32(&h.gcing, 0)
+	defer h.gcing.Store(false)
 
 	if time.Since(h.gcAt) < time.Hour {
 		h.logger.Debugf("skip gc: %v", h.gcAt.String())
@@ -402,22 +431,23 @@ func (h *Handler) gcCache() {
 	h.gcAt = time.Now()
 	h.logger.Debugf("gc: %v", h.gcAt.String())
 
-	const (
-		keepUsed   = 30 * 24 * time.Hour
-		keepUnused = 7 * 24 * time.Hour
-		keepTemp   = 5 * time.Minute
-	)
+	db, err := h.openDB()
+	if err != nil {
+		return
+	}
+	defer db.Close()
 
+	// Remove the caches which are not completed for a while, they are most likely to be broken.
 	var caches []*Cache
-	if err := h.db.Find(&caches, bolthold.Where("UsedAt").Lt(time.Now().Add(-keepTemp).Unix())); err != nil {
+	if err := db.Find(&caches, bolthold.
+		Where("UsedAt").Lt(time.Now().Add(-keepTemp).Unix()).
+		And("Complete").Eq(false),
+	); err != nil {
 		h.logger.Warnf("find caches: %v", err)
 	} else {
 		for _, cache := range caches {
-			if cache.Complete {
-				continue
-			}
 			h.storage.Remove(cache.ID)
-			if err := h.db.Delete(cache.ID, cache); err != nil {
+			if err := db.Delete(cache.ID, cache); err != nil {
 				h.logger.Warnf("delete cache: %v", err)
 				continue
 			}
@@ -425,13 +455,16 @@ func (h *Handler) gcCache() {
 		}
 	}
 
+	// Remove the old caches which have not been used recently.
 	caches = caches[:0]
-	if err := h.db.Find(&caches, bolthold.Where("UsedAt").Lt(time.Now().Add(-keepUnused).Unix())); err != nil {
+	if err := db.Find(&caches, bolthold.
+		Where("UsedAt").Lt(time.Now().Add(-keepUnused).Unix()),
+	); err != nil {
 		h.logger.Warnf("find caches: %v", err)
 	} else {
 		for _, cache := range caches {
 			h.storage.Remove(cache.ID)
-			if err := h.db.Delete(cache.ID, cache); err != nil {
+			if err := db.Delete(cache.ID, cache); err != nil {
 				h.logger.Warnf("delete cache: %v", err)
 				continue
 			}
@@ -439,17 +472,52 @@ func (h *Handler) gcCache() {
 		}
 	}
 
+	// Remove the old caches which are too old.
 	caches = caches[:0]
-	if err := h.db.Find(&caches, bolthold.Where("CreatedAt").Lt(time.Now().Add(-keepUsed).Unix())); err != nil {
+	if err := db.Find(&caches, bolthold.
+		Where("CreatedAt").Lt(time.Now().Add(-keepUsed).Unix()),
+	); err != nil {
 		h.logger.Warnf("find caches: %v", err)
 	} else {
 		for _, cache := range caches {
 			h.storage.Remove(cache.ID)
-			if err := h.db.Delete(cache.ID, cache); err != nil {
+			if err := db.Delete(cache.ID, cache); err != nil {
 				h.logger.Warnf("delete cache: %v", err)
 				continue
 			}
 			h.logger.Infof("deleted cache: %+v", cache)
+		}
+	}
+
+	// Remove the old caches with the same key and version, keep the latest one.
+	// Also keep the olds which have been used recently for a while in case of the cache is still in use.
+	if results, err := db.FindAggregate(
+		&Cache{},
+		bolthold.Where("Complete").Eq(true),
+		"Key", "Version",
+	); err != nil {
+		h.logger.Warnf("find aggregate caches: %v", err)
+	} else {
+		for _, result := range results {
+			if result.Count() <= 1 {
+				continue
+			}
+			result.Sort("CreatedAt")
+			caches = caches[:0]
+			result.Reduction(&caches)
+			for _, cache := range caches[:len(caches)-1] {
+				if time.Since(time.Unix(cache.UsedAt, 0)) < keepOld {
+					// Keep it since it has been used recently, even if it's old.
+					// Or it could break downloading in process.
+					continue
+				}
+				h.storage.Remove(cache.ID)
+				if err := db.Delete(cache.ID, cache); err != nil {
+					h.logger.Warnf("delete cache: %v", err)
+					continue
+				}
+				h.logger.Infof("deleted cache: %+v", cache)
+			}
 		}
 	}
 }

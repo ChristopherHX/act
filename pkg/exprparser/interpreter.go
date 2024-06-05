@@ -20,12 +20,13 @@ type EvaluationEnvironment struct {
 	Steps       map[string]*model.StepResult
 	Runner      map[string]interface{}
 	Secrets     map[string]string
+	Vars        map[string]string
 	Strategy    map[string]interface{}
 	Matrix      map[string]interface{}
 	Needs       map[string]Needs
 	Inputs      map[string]interface{}
 	ContextData map[string]interface{}
-	Hashfiles   func([]reflect.Value) (interface{}, error)
+	HashFiles   func([]reflect.Value) (interface{}, error)
 	EnvCaseSens bool
 }
 
@@ -154,6 +155,7 @@ func (impl *interperterImpl) evaluateNode(exprNode actionlint.ExprNode) (interfa
 	}
 }
 
+//nolint:gocyclo
 func (impl *interperterImpl) evaluateVariable(variableNode *actionlint.VariableNode) (interface{}, error) {
 	lowerName := strings.ToLower(variableNode.Name)
 	if cd, ok := impl.env.ContextData[lowerName]; ok {
@@ -195,6 +197,8 @@ func (impl *interperterImpl) evaluateVariable(variableNode *actionlint.VariableN
 		return impl.env.Runner, nil
 	case "secrets":
 		return impl.env.Secrets, nil
+	case "vars":
+		return impl.env.Vars, nil
 	case "strategy":
 		return impl.env.Strategy, nil
 	case "matrix":
@@ -475,7 +479,7 @@ func (impl *interperterImpl) coerceToString(value reflect.Value) reflect.Value {
 		} else if math.IsInf(value.Float(), -1) {
 			return reflect.ValueOf("-Infinity")
 		}
-		return reflect.ValueOf(fmt.Sprint(value))
+		return reflect.ValueOf(fmt.Sprintf("%.15G", value.Float()))
 
 	case reflect.Slice:
 		return reflect.ValueOf("Array")
@@ -636,8 +640,8 @@ func (impl *interperterImpl) evaluateFuncCall(funcCallNode *actionlint.FuncCallN
 	case "fromjson":
 		return impl.fromJSON(args[0])
 	case "hashfiles":
-		if impl.env.Hashfiles != nil {
-			return impl.env.Hashfiles(args)
+		if impl.env.HashFiles != nil {
+			return impl.env.HashFiles(args)
 		}
 		return impl.hashFiles(args...)
 	case "always":

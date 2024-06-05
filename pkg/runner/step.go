@@ -34,6 +34,9 @@ const (
 	stepStagePost
 )
 
+// Controls how many symlinks are resolved for local and remote Actions
+const maxSymlinkDepth = 10
+
 func (s stepStage) String() string {
 	switch s {
 	case stepStagePre:
@@ -257,6 +260,16 @@ func mergeEnv(ctx context.Context, step step) {
 	}
 
 	rc.withGithubEnv(ctx, step.getGithubContext(ctx), *env)
+
+	if step.getStepModel().Uses != "" {
+		// prevent uses action input pollution of unset parameters, skip this for run steps
+		// due to design flaw
+		for key := range *env {
+			if strings.Contains(key, "INPUT_") {
+				delete(*env, key)
+			}
+		}
+	}
 }
 
 func isStepEnabled(ctx context.Context, expr string, step step, stage stepStage) (bool, error) {
@@ -277,7 +290,7 @@ func isStepEnabled(ctx context.Context, expr string, step step, stage stepStage)
 	return runStep, nil
 }
 
-func isContinueOnError(ctx context.Context, expr string, step step, stage stepStage) (bool, error) {
+func isContinueOnError(ctx context.Context, expr string, step step, _ stepStage) (bool, error) {
 	// https://github.com/github/docs/blob/3ae84420bd10997bb5f35f629ebb7160fe776eae/content/actions/reference/workflow-syntax-for-github-actions.md?plain=true#L962
 	if len(strings.TrimSpace(expr)) == 0 {
 		return false, nil
@@ -327,4 +340,14 @@ func mergeIntoMapCaseInsensitive(target map[string]string, maps ...map[string]st
 			target[toKey(k)] = v
 		}
 	}
+}
+
+func symlinkJoin(filename, sym, parent string) (string, error) {
+	dir := path.Dir(filename)
+	dest := path.Join(dir, sym)
+	prefix := path.Clean(parent) + "/"
+	if strings.HasPrefix(dest, prefix) || prefix == "./" {
+		return dest, nil
+	}
+	return "", fmt.Errorf("symlink tries to access file '%s' outside of '%s'", strings.ReplaceAll(dest, "'", "''"), strings.ReplaceAll(parent, "'", "''"))
 }

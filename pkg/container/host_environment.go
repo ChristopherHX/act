@@ -21,6 +21,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/nektos/act/pkg/common"
+	"github.com/nektos/act/pkg/filecollector"
 	"github.com/nektos/act/pkg/lookpath"
 )
 
@@ -34,7 +35,7 @@ type HostEnvironment struct {
 	StdOut    io.Writer
 }
 
-func (e *HostEnvironment) Create(capAdd []string, capDrop []string) common.Executor {
+func (e *HostEnvironment) Create(_ []string, _ []string) common.Executor {
 	return func(ctx context.Context) error {
 		return nil
 	}
@@ -60,6 +61,33 @@ func (e *HostEnvironment) Copy(destPath string, files ...*FileEntry) common.Exec
 	}
 }
 
+func (e *HostEnvironment) CopyTarStream(ctx context.Context, destPath string, tarStream io.Reader) error {
+	if err := os.RemoveAll(destPath); err != nil {
+		return err
+	}
+	tr := tar.NewReader(tarStream)
+	cp := &filecollector.CopyCollector{
+		DstDir: destPath,
+	}
+	for {
+		ti, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if ti.FileInfo().IsDir() {
+			continue
+		}
+		if ctx.Err() != nil {
+			return fmt.Errorf("CopyTarStream has been cancelled")
+		}
+		if err := cp.WriteFile(ti.Name, ti.FileInfo(), ti.Linkname, tr); err != nil {
+			return err
+		}
+	}
+}
+
 func (e *HostEnvironment) CopyDir(destPath string, srcPath string, useGitIgnore bool) common.Executor {
 	return func(ctx context.Context) error {
 		logger := common.Logger(ctx)
@@ -77,16 +105,16 @@ func (e *HostEnvironment) CopyDir(destPath string, srcPath string, useGitIgnore 
 
 			ignorer = gitignore.NewMatcher(ps)
 		}
-		fc := &fileCollector{
-			Fs:        &defaultFs{},
+		fc := &filecollector.FileCollector{
+			Fs:        &filecollector.DefaultFs{},
 			Ignorer:   ignorer,
 			SrcPath:   srcPath,
 			SrcPrefix: srcPrefix,
-			Handler: &copyCollector{
+			Handler: &filecollector.CopyCollector{
 				DstDir: destPath,
 			},
 		}
-		return filepath.Walk(srcPath, fc.collectFiles(ctx, []string{}))
+		return filepath.Walk(srcPath, fc.CollectFiles(ctx, []string{}))
 	}
 }
 
@@ -99,21 +127,21 @@ func (e *HostEnvironment) GetContainerArchive(ctx context.Context, srcPath strin
 	if err != nil {
 		return nil, err
 	}
-	tc := &tarCollector{
+	tc := &filecollector.TarCollector{
 		TarWriter: tw,
 	}
 	if fi.IsDir() {
-		srcPrefix := filepath.Dir(srcPath)
+		srcPrefix := srcPath
 		if !strings.HasSuffix(srcPrefix, string(filepath.Separator)) {
 			srcPrefix += string(filepath.Separator)
 		}
-		fc := &fileCollector{
-			Fs:        &defaultFs{},
+		fc := &filecollector.FileCollector{
+			Fs:        &filecollector.DefaultFs{},
 			SrcPath:   srcPath,
 			SrcPrefix: srcPrefix,
 			Handler:   tc,
 		}
-		err = filepath.Walk(srcPath, fc.collectFiles(ctx, []string{}))
+		err = filepath.Walk(srcPath, fc.CollectFiles(ctx, []string{}))
 		if err != nil {
 			return nil, err
 		}
@@ -140,13 +168,13 @@ func (e *HostEnvironment) GetContainerArchive(ctx context.Context, srcPath strin
 	return io.NopCloser(buf), nil
 }
 
-func (e *HostEnvironment) Pull(forcePull bool) common.Executor {
+func (e *HostEnvironment) Pull(_ bool) common.Executor {
 	return func(ctx context.Context) error {
 		return nil
 	}
 }
 
-func (e *HostEnvironment) Start(attach bool) common.Executor {
+func (e *HostEnvironment) Start(_ bool) common.Executor {
 	return func(ctx context.Context) error {
 		return nil
 	}
@@ -240,7 +268,7 @@ func copyPtyOutput(writer io.Writer, ppty io.Reader, finishLog context.CancelFun
 	}
 }
 
-func (e *HostEnvironment) UpdateFromImageEnv(env *map[string]string) common.Executor {
+func (e *HostEnvironment) UpdateFromImageEnv(_ *map[string]string) common.Executor {
 	return func(ctx context.Context) error {
 		return nil
 	}
@@ -254,7 +282,7 @@ func getEnvListFromMap(env map[string]string) []string {
 	return envList
 }
 
-func (e *HostEnvironment) exec(ctx context.Context, command []string, cmdline string, env map[string]string, user, workdir string) error {
+func (e *HostEnvironment) exec(ctx context.Context, command []string, cmdline string, env map[string]string, _, workdir string) error {
 	envList := getEnvListFromMap(env)
 	var wd string
 	if workdir != "" {
@@ -391,11 +419,13 @@ func (*HostEnvironment) JoinPathVariable(paths ...string) string {
 	return strings.Join(paths, string(filepath.ListSeparator))
 }
 
+// Reference for Arch values for runner.arch
+// https://docs.github.com/en/actions/learn-github-actions/contexts#runner-context
 func goArchToActionArch(arch string) string {
 	archMapper := map[string]string{
 		"x86_64":  "X64",
-		"386":     "x86",
-		"aarch64": "arm64",
+		"386":     "X86",
+		"aarch64": "ARM64",
 	}
 	if arch, ok := archMapper[arch]; ok {
 		return arch
@@ -413,7 +443,7 @@ func goOsToActionOs(os string) string {
 	return os
 }
 
-func (e *HostEnvironment) GetRunnerContext(ctx context.Context) map[string]interface{} {
+func (e *HostEnvironment) GetRunnerContext(_ context.Context) map[string]interface{} {
 	return map[string]interface{}{
 		"os":         goOsToActionOs(runtime.GOOS),
 		"arch":       goArchToActionArch(runtime.GOARCH),
@@ -422,7 +452,7 @@ func (e *HostEnvironment) GetRunnerContext(ctx context.Context) map[string]inter
 	}
 }
 
-func (e *HostEnvironment) ReplaceLogWriter(stdout io.Writer, stderr io.Writer) (io.Writer, io.Writer) {
+func (e *HostEnvironment) ReplaceLogWriter(stdout io.Writer, _ io.Writer) (io.Writer, io.Writer) {
 	org := e.StdOut
 	e.StdOut = stdout
 	return org, org
