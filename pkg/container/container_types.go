@@ -56,6 +56,7 @@ type Container interface {
 	Remove() common.Executor
 	Close() common.Executor
 	ReplaceLogWriter(io.Writer, io.Writer) (io.Writer, io.Writer)
+	GetHealth(ctx context.Context) ContainerHealth
 }
 
 // NewDockerBuildExecutorInput the input for the NewDockerBuildExecutor function
@@ -85,3 +86,11 @@ func init() {
 func SetContainerAllocateTerminal(val bool) {
 	containerAllocateTerminal = val
 }
+
+type ContainerHealth int
+
+const (
+	ContainerHealthStarting ContainerHealth = iota
+	ContainerHealthHealthy
+	ContainerHealthUnHealthy
+)
