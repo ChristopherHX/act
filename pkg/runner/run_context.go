@@ -910,6 +910,10 @@ func (rc *RunContext) getGithubContext(ctx context.Context) *model.GithubContext
 		_ = json.Unmarshal(content, &ghc)
 	}
 
+	if ghc.RunAttempt == "" {
+		ghc.RunAttempt = "1"
+	}
+
 	if ghc.RunID == "" {
 		ghc.RunID = "1"
 	}
@@ -1025,6 +1029,7 @@ func nestedMapLookup(m map[string]interface{}, ks ...string) (rval interface{}) 
 func (rc *RunContext) withGithubEnv(ctx context.Context, github *model.GithubContext, env map[string]string) map[string]string {
 	env["CI"] = "true"
 	env["GITHUB_WORKFLOW"] = github.Workflow
+	env["GITHUB_RUN_ATTEMPT"] = github.RunAttempt
 	env["GITHUB_RUN_ID"] = github.RunID
 	env["GITHUB_RUN_NUMBER"] = github.RunNumber
 	env["GITHUB_RUN_ATTEMPT"] = github.RunAttempt

@@ -253,6 +253,7 @@ func TestSetupEnv(t *testing.T) {
 		"GITHUB_RETENTION_DAYS":    "0",
 		"GITHUB_RUN_ID":            "runId",
 		"GITHUB_RUN_NUMBER":        "1",
+		"GITHUB_RUN_ATTEMPT":       "1",
 		"GITHUB_SERVER_URL":        "https://",
 		"GITHUB_WORKFLOW":          "",
 		"INPUT_STEP_WITH":          "with-value",

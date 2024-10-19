@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nektos/act/pkg/common"
+	"github.com/nektos/act/pkg/schema"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -64,6 +65,18 @@ func (w *Workflow) OnEvent(event string) interface{} {
 		return val[event]
 	}
 	return nil
+}
+
+func (w *Workflow) UnmarshalYAML(node *yaml.Node) error {
+	// Validate the schema before deserializing it into our model
+	if err := (&schema.Node{
+		Definition: "workflow-root-strict",
+		Schema:     schema.GetWorkflowSchema(),
+	}).UnmarshalYAML(node); err != nil {
+		return err
+	}
+	type WorkflowDefault Workflow
+	return node.Decode((*WorkflowDefault)(w))
 }
 
 type WorkflowDispatchInput struct {
@@ -559,6 +572,8 @@ type Step struct {
 	Uses               string            `yaml:"uses"`
 	Run                string            `yaml:"run"`
 	WorkingDirectory   string            `yaml:"working-directory"`
+	// WorkflowShell is the shell really configured in the job, directly at step level or higher in defaults.run.shell
+	WorkflowShell      string            `yaml:"-"`
 	Shell              string            `yaml:"shell"`
 	Env                yaml.Node         `yaml:"env"`
 	With               map[string]string `yaml:"with"`
@@ -601,8 +616,14 @@ func (s *Step) ShellCommand() string {
 
 	//Reference: https://github.com/actions/runner/blob/8109c962f09d9acc473d92c595ff43afceddb347/src/Runner.Worker/Handlers/ScriptHandlerHelpers.cs#L9-L17
 	switch s.Shell {
-	case "", "bash":
-		shellCommand = "bash --noprofile --norc -e -o pipefail {0}"
+	case "":
+		shellCommand = "bash -e {0}"
+	case "bash":
+		if s.WorkflowShell == "" {
+			shellCommand = "bash -e {0}"
+		} else {
+			shellCommand = "bash --noprofile --norc -e -o pipefail {0}"
+		}
 	case "pwsh":
 		shellCommand = "pwsh -command . '{0}'"
 	case "python":
