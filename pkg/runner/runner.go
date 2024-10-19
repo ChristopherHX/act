@@ -67,6 +67,7 @@ type Config struct {
 	ContainerNetworkMode               docker_container.NetworkMode // the network mode of job containers (the value of --network)
 	ActionCache                        ActionCache                  // Use a custom ActionCache Implementation
 	DownloadAction                     func(git.NewGitCloneExecutorInput) common.Executor
+	HostEnvironmentDir                 string
 }
 
 func (runnerConfig *Config) GetGitHubServerUrl() string {

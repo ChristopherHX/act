@@ -190,9 +190,19 @@ func (rc *RunContext) startHostEnvironment() common.Executor {
 			return true
 		})
 		cacheDir := rc.ActionCacheDir()
-		randBytes := make([]byte, 8)
-		_, _ = rand.Read(randBytes)
-		miscpath := filepath.Join(cacheDir, hex.EncodeToString(randBytes))
+		var miscpath string
+		workdir := rc.Config.HostEnvironmentDir
+		if workdir == "" {
+			randBytes := make([]byte, 8)
+			_, _ = rand.Read(randBytes)
+			workdir = hex.EncodeToString(randBytes)
+		}
+		if filepath.IsAbs(workdir) {
+			miscpath = workdir
+		} else {
+			miscpath = filepath.Join(cacheDir, workdir)
+		}
+
 		actPath := filepath.Join(miscpath, "act")
 		if err := os.MkdirAll(actPath, 0o777); err != nil {
 			return err
