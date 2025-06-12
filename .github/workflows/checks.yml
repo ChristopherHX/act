@@ -29,7 +29,7 @@ jobs:
           original_msg=$(git log -1 --pretty=%B "FETCH_HEAD")
           
           # Strip issue number pattern like "(#1234)"
-          cleaned_msg=$(echo "$original_msg" | sed -E 's/[[:space:]]*\(#\d+\)[[:space:]]*$//')
+          cleaned_msg=$(echo "$original_msg" | sed -E ':a;N;$!ba;s/[[:space:]]*\(#\d+\)[[:space:]]*$//')
           
           # Commit with cleaned message
           git commit -m "$cleaned_msg"
