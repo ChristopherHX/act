@@ -21,5 +21,16 @@ jobs:
       - run: git fetch https://github.com/nektos/act HEAD
       - run: git checkout FETCH_HEAD
       - run: git fetch https://github.com/actions-oss/act-cli ${{ inputs.sha }}
-      - run: git cherry-pick FETCH_HEAD
+      #- run: git cherry-pick FETCH_HEAD
+      - run: |
+          git cherry-pick --no-commit "FETCH_HEAD"
+          
+          # Get original commit message
+          original_msg=$(git log -1 --pretty=%B "FETCH_HEAD")
+          
+          # Strip issue number pattern like "(#1234)"
+          cleaned_msg=$(echo "$original_msg" | sed -E 's/\s*\(#\d+\)//')
+          
+          # Commit with cleaned message
+          git commit -m "$cleaned_msg"
       - run: git push origin HEAD:refs/heads/bp-${{ github.run_id }}
