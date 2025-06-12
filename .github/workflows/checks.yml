@@ -29,8 +29,16 @@ jobs:
           original_msg=$(git log -1 --pretty=%B "FETCH_HEAD")
           
           # Strip issue number pattern like "(#1234)"
-          cleaned_msg=$(echo "$original_msg" | sed -E ':a;N;$!ba;s/[[:space:]]*\(#\d+\)[[:space:]]*$//')
-          
+          cleaned_msg=$(echo "$original_msg" | awk '
+            BEGIN { ORS="" }
+            {
+              if (NR > 1) print "\n";
+              if (NR == NR) {
+                sub(/[[:space:]]*\(#([0-9]+)\)[[:space:]]*$/, "", $0);
+              }
+              print $0
+            }
+          ')          
           # Commit with cleaned message
           git commit -m "$cleaned_msg"
       - run: git push origin HEAD:refs/heads/bp-${{ github.run_id }}
