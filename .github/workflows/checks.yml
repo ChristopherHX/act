@@ -12,6 +12,11 @@ jobs:
     name: test-linux
     runs-on: ubuntu-latest
     steps:
+      - name: setup git
+        run: |
+          # from https://github.com/orgs/community/discussions/26560
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
       - uses: actions/checkout@v4
       - run: git fetch https://github.com/nektos/act HEAD
       - run: git checkout FETCH_HEAD
